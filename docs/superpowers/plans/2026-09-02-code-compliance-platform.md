@@ -2804,6 +2804,8 @@ import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
 import jakarta.persistence.Table
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.time.Instant
 
 @Entity
@@ -2816,6 +2818,10 @@ class ChecklistVersion : BaseEntity() {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     var status: VersionStatus = VersionStatus.DRAFT
+    // Ruling #25: String on a jsonb column binds as varchar without @JdbcTypeCode (Ruling #13
+    // pattern) — INSERT fails "column is of type jsonb but expression is of type character varying".
+    // Task 3.2's versioning WILL write content_snapshot, so the annotation must be here now.
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "content_snapshot", columnDefinition = "jsonb")
     var contentSnapshot: String? = null
     @Column(name = "published_at")
@@ -2878,12 +2884,16 @@ import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Table
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 
 @Entity
 @Table(name = "checklist_item_detail")
 class ChecklistItemDetail : BaseEntity() {
     @Column(name = "item_id", nullable = false)
     var itemId: Long = 0
+    // Ruling #25: same jsonb binding requirement as ChecklistVersion.contentSnapshot.
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "detail_json", columnDefinition = "jsonb")
     var detailJson: String? = null
 }
