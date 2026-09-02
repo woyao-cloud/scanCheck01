@@ -37,7 +37,7 @@ build.gradle.kts                                              # 根构建
 
 app-server/src/main/kotlin/com/example/compliance/Application.kt
 app-server/src/main/resources/application.yml
-app-server/src/main/resources/db/migration/V1..V8__*.sql      # 全部 Flyway 迁移
+app-server/src/main/resources/db/migration/V1..V7__*.sql      # 全部 Flyway 迁移
 app-server/src/test/kotlin/com/example/compliance/AbstractIntegrationTest.kt
 docker-compose.yml
 
@@ -232,19 +232,29 @@ git commit -m "chore: gradle root project with version catalog"
 ```kotlin
 dependencyResolutionManagement {
     repositories { gradlePluginPortal(); mavenCentral() }
+    // buildSrc 是独立构建，不自动继承主构建的 version catalog，必须显式导入
+    versionCatalogs {
+        create("libs") { from(files("../gradle/libs.versions.toml")) }
+    }
 }
 ```
 
 `buildSrc/src/main/kotlin/compliance-kotlin-module.gradle.kts`:
 ```kotlin
+import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.kotlin.dsl.the
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+// 注意：预编译脚本插件的 plugins 块无法访问 version catalog（Gradle 官方限制），
+// 因此插件版本在此显式给出；依赖通过 VersionCatalogsExtension 显式取 catalog。
 plugins {
-    alias(libs.plugins.kotlin.jvm)
-    alias(libs.plugins.kotlin.spring)
-    alias(libs.plugins.kotlin.jpa)
-    alias(libs.plugins.spring.dependency.management)
+    kotlin("jvm") version "2.0.21"
+    kotlin("plugin.spring") version "2.0.21"
+    kotlin("plugin.jpa") version "2.0.21"
+    id("io.spring.dependency-management") version "1.1.6"
 }
+
+val libs = the<VersionCatalogsExtension>().named("libs")
 
 java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
