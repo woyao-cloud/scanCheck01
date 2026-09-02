@@ -20,6 +20,12 @@ interface ScanExecutionLogRepository : JpaRepository<ScanExecutionLog, Long> {
 interface ComplianceEvaluationRepository : JpaRepository<ComplianceEvaluation, Long> {
     fun findByScanTaskId(scanTaskId: Long): ComplianceEvaluation?
     fun findFirstByProjectIdOrderByIdDesc(projectId: Long): ComplianceEvaluation?
+
+    /** M5 趋势分析使用：按时间升序返回项目指定时间之后的评估。 */
+    fun findAllByProjectIdAndCreatedAtGreaterThanEqualOrderByCreatedAtAsc(
+        projectId: Long,
+        since: java.time.Instant,
+    ): List<ComplianceEvaluation>
 }
 
 interface ChecklistItemResultRepository : JpaRepository<ChecklistItemResult, Long> {
