@@ -42,6 +42,10 @@ class ComplianceKotlinModulePlugin : Plugin<Project> {
         }
 
         val libs = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
+        // kotlin-reflect: Spring Data JPA needs Kotlin reflection to map Kotlin entities at
+        // runtime; without it bootRun dies with NoClassDefFoundError kotlin/reflect/full/KClasses
+        // (it used to leak in via MockK on the test classpath only — see Ruling #16).
+        project.dependencies.add("implementation", libs.findLibrary("kotlin-reflect").get())
         project.dependencies.add("testImplementation", libs.findLibrary("spring-boot-starter-test").get())
         project.dependencies.add("testImplementation", libs.findLibrary("mockk").get())
         project.dependencies.add("testImplementation", libs.findLibrary("kotlin-test").get())
