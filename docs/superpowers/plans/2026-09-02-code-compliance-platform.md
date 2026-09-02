@@ -5462,7 +5462,6 @@ import com.example.compliance.scan.infrastructure.ScanTaskRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
@@ -5485,8 +5484,11 @@ class ScanOrchestrator(
     private val objectMapper = ObjectMapper()
 
     /** 全流水线：RUNNING → adapter 扫描 → 归一化 → 指纹去重入库 → 合规判定 → 汇总评估。 */
+    // Ruling #52: 刻意不加 @Transactional（同 Ruling #45）—— 每个 repo save 自带事务立即提交，
+    // catch 里的 FAILED 写入必然落库。若加外层 @Transactional，来自事务性协作方（如
+    // FindingService.upsertByFingerprint）的异常会把共享事务标记 rollback-only，commit 时报
+    // UnexpectedRollbackException，FAILED 写入被回滚 → 任务永远卡在 PENDING。
     @Async("scanExecutor")
-    @Transactional
     fun executeAsync(scanTaskId: Long) {
         val task = scanTaskRepository.findById(scanTaskId)
             .orElseThrow { BusinessException(404, "scan task not found: $scanTaskId") }
@@ -6119,12 +6121,15 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
+import org.springframework.security.test.context.support.WithMockUser
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
+// Ruling #49: MockMvc hits the live Task 1.3 security chain (everything authenticated) — @WithMockUser required.
 @AutoConfigureMockMvc
+@WithMockUser
 class ReportApiIntegrationTest : AbstractIntegrationTest() {
 
     @TestConfiguration
@@ -6148,14 +6153,16 @@ class ReportApiIntegrationTest : AbstractIntegrationTest() {
     fun `reports return summary and compliance data after pipeline scan`() {
         val project = projectService.create(CreateProjectCommand("RPT", "报表项目", null, null))
         projectService.bindRepository(project.id!!, BindRepositoryCommand("r", "https://git.example.com/r.git", "GITLAB", "main", "t"))
-        val standard = checklistService.createStandard("SEC", "规范", null)
-        val checklist = checklistService.createChecklist(standard.id!!, "SEC-BASIC", "基线")
-        checklistService.addItem(checklist.id!!, AddItemCommand("SEC-001", "防注入", "HIGH"))
+        // Ruling #48: RPT-* codes disjoint from frozen Task 3.1 (SEC) and Task 4.3 (PIPE) in the shared :app-server:test container.
+        val standard = checklistService.createStandard("RPT-SEC", "规范", null)
+        val checklist = checklistService.createChecklist(standard.id!!, "RPT-BASIC", "基线")
+        checklistService.addItem(checklist.id!!, AddItemCommand(itemCode = "RPT-001", name = "防注入", riskLevel = "HIGH"))
         val version = checklistService.publish(checklist.id!!)
         checklistService.bindProject(project.id!!, version.id!!)
-        val rule = ruleService.create(CreateRuleCommand("STUB-SQLI", "注入", "HIGH", null))
+        // Ruling #48: RPT-SQLI rule code disjoint from Task 4.3's STUB-SQLI (rule_definition.rule_code is UNIQUE, V5 DDL).
+        val rule = ruleService.create(CreateRuleCommand("RPT-SQLI", "注入", "HIGH", null))
         ruleService.addEngineBinding(rule.id!!, AddEngineBindingCommand("STUB", "stub-rule-sqli", null))
-        ruleService.addComplianceMapping(rule.id!!, "SEC-001")
+        ruleService.addComplianceMapping(rule.id!!, "RPT-001")
         ruleService.setEvaluationPolicy(rule.id!!, SetPolicyCommand("FAIL", null, "severity == 'HIGH'"))
         ruleService.publish(rule.id!!)
 
@@ -6173,7 +6180,7 @@ class ReportApiIntegrationTest : AbstractIntegrationTest() {
         mockMvc.perform(get("/api/v1/reports/compliance-summary").param("projectId", project.id.toString()))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.failed").value(1))
-            .andExpect(jsonPath("$.data.items[0].itemCode").value("SEC-001"))
+            .andExpect(jsonPath("$.data.items[0].itemCode").value("RPT-001"))
             .andExpect(jsonPath("$.data.items[0].result").value("FAIL"))
 
         mockMvc.perform(get("/api/v1/reports/trend").param("projectId", project.id.toString()).param("days", "30"))
@@ -6256,5 +6263,5 @@ docker compose up -d postgres    # 起 PostgreSQL 16（M0 已提供 docker-compo
 | P1 | 合规判定用 `rule_evaluation_policy`（policyJson 结构化配置 + SpEL），不开放任意脚本 | spec D 系列：判定可审计、可解释，红线「不硬编码规则」 |
 | P2 | 判定结果只对「命中规则且映射到清单」的条目落 `checklist_item_result`；无 finding 的条目本轮不计分 | P0 报表基于已记录结果；完整计分留 P1 趋势统计 |
 | P3 | Flyway 迁移全在 `app-server`（V1..V7），业务模块不挂迁移 | 单一升级入口，避免多数据源迁移冲突 |
-| P4 | 扫描 async 用 `@Async("scanExecutor")` + `@Transactional` 单事务长事务 | P0 单引擎、结果量小；大结果集分片落库留 P1 |
+| P4 | 扫描 async 用 `@Async("scanExecutor")`，不加外层 @Transactional（Ruling #52）：每阶段 repo save 自带事务立即提交，FAILED 状态必然落库；避免事务性协作方异常导致 rollback-only 卡死任务 | P0 单引擎、结果量小；大结果集分片落库留 P1 |
 | P5 | Semgrep 退出码非 0 视为正常（违规即非 0），以 stdout JSON 解析为准 | 引擎契约如此，避免把「发现违规」误判为「扫描失败」 |
