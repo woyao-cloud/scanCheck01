@@ -1,0 +1,10 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+app:
+  jwt:
+    secret: "test-secret-test-secret-test-secret-test-secret-test-secret!"
+    expiration-minutes: 120
