@@ -653,6 +653,7 @@ git commit -m "feat(common): unified response, page, exception handling"
 ```kotlin
 package com.example.compliance.common.audit
 
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
@@ -661,6 +662,9 @@ class AuditServiceTest {
     @Test
     fun `record persists an audit log row`() {
         val repo = mockk<AuditLogRepository>(relaxed = true)
+        // REQUIRED: relaxed `save` returns Object (generic erased) -> ClassCastException at the
+        // Kotlin call site (checkcast to AuditLog). Stub returns firstArg (see Ruling #13).
+        every { repo.save(any()) } answers { firstArg() }
         val service = AuditService(repo)
         service.record(action = "CREATE", module = "project", userId = 1L, resourceType = "Project", resourceId = 9L)
         verify(exactly = 1) { repo.save(any()) }
@@ -708,6 +712,8 @@ package com.example.compliance.common.audit
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.time.Instant
 
 @Entity
@@ -728,6 +734,7 @@ class AuditLog : BaseEntity() {
     @Column(name = "resource_id")
     var resourceId: Long? = null
 
+    @JdbcTypeCode(SqlTypes.JSON)  // REQUIRED: binds String as jsonb (not varchar) on INSERT — see Ruling #13
     @Column(name = "detail", columnDefinition = "jsonb")
     var detail: String? = null
 
@@ -968,6 +975,12 @@ import org.testcontainers.junit.jupiter.Testcontainers
 @ActiveProfiles("test")
 abstract class AbstractIntegrationTest {
     companion object {
+        init {
+            // REQUIRED: Docker Desktop 4.7x (engine 29.x, MinAPIVersion >= 1.40) rejects
+            // docker-java's hardcoded default API v1.32 with 400 (empty info) — see Ruling #14.
+            System.setProperty("api.version", "1.44")
+        }
+
         @Container
         @JvmStatic
         val postgres: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:16")
@@ -1014,17 +1027,17 @@ class SmokeIntegrationTest : AbstractIntegrationTest() {
 
 - [ ] **Step 5: 运行测试确认失败**
 
-Run: `docker compose up -d` 后 `gradle :app-server:test --tests "*SmokeIntegrationTest*"`
-Expected: 编译失败（类不存在）；此步同时确认 PostgreSQL 可用。
+Run: `./gradlew :app-server:test --tests "*SmokeIntegrationTest*"`
+Expected: 编译失败（类不存在）。注意：测试用 Testcontainers 自管 PostgreSQL，`docker compose up -d` 可选（仅作环境自检）。
 
 - [ ] **Step 6: 写实现（上述文件已含全部实现代码，直接落地）后运行通过**
 
-Run: `gradle :app-server:test --tests "*SmokeIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*SmokeIntegrationTest*"`
 Expected: PASS（Testcontainers 起真实 PG，Flyway 执行 V1，audit 写入并 count=1）。
 
 - [ ] **Step 7: 手工验证启动**
 
-Run: `gradle :app-server:bootRun`（后台），另终端 `curl http://localhost:8080/v3/api-docs` 或访问 `http://localhost:8080/swagger-ui.html`。
+Run: `./gradlew :app-server:bootRun`（后台），另终端 `curl http://localhost:8080/v3/api-docs` 或访问 `http://localhost:8080/swagger-ui.html`。
 Expected: 应用启动成功，无 `FlywayException`。
 
 - [ ] **Step 8: Commit**
@@ -1034,7 +1047,7 @@ git add app-server/src docker-compose.yml
 git commit -m "feat(app): bootable app with docker-compose, flyway, testcontainers harness"
 ```
 
-**M0 完成标准**：`gradle build -x test` 全绿；`SmokeIntegrationTest` 通过；`docker compose up -d` + `bootRun` 可启动。
+**M0 完成标准**：`./gradlew build -x test` 全绿；`SmokeIntegrationTest` 通过；`docker compose up -d` + `bootRun` 可启动。
 
 ---
 
