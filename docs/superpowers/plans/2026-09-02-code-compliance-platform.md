@@ -474,9 +474,16 @@ git commit -m "chore: scaffold 15 modules with convention plugin"
 - Create: `module-common/src/main/kotlin/com/example/compliance/common/exception/BusinessException.kt`
 - Create: `module-common/src/main/kotlin/com/example/compliance/common/exception/GlobalExceptionHandler.kt`
 - Test: `module-common/src/test/kotlin/com/example/compliance/common/exception/GlobalExceptionHandlerTest.kt`
+- Modify: `gradle/libs.versions.toml`（[libraries] 新增 `kotlin-test`，version.ref = "kotlin"）
+- Modify: `buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt`（testImplementation 增加 kotlin-test）
 
 **Interfaces:**
 - Produces: `ApiResponse<T>(code, message, data)` + `ApiResponse.ok(data)` / `ApiResponse.ok()` / `ApiResponse.error(code, msg)`；`PageResponse<T>(items, page, size, total)`；`BusinessException(code=400, message)`；`@RestControllerAdvice GlobalExceptionHandler` 将 `BusinessException`、`MethodArgumentNotValidException`、未知异常转为统一响应。
+
+> **预验证缺陷修复（Gradle 8.8 复刻实测，本任务已含修正）**：
+> 1. 测试用 `kotlin.test.assertEquals`/`assertTrue`，但 `kotlin-test` 不在任何依赖中（spring-boot-starter-test 不含），测试编译报 `Unresolved reference 'test'`。修复：`gradle/libs.versions.toml` 新增 `kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }`，约定插件 testImplementation 追加该依赖（对所有模块生效）。
+> 2. `GlobalExceptionHandler.handleBusiness` 里 `ApiResponse.error(e.code, e.message)` 编译不过——`RuntimeException.message` 是 `String?`。修复：`e.message ?: "business error"`。
+> 3. 所有 Gradle 命令用 `./gradlew`（8.8 wrapper），不用系统 `gradle`。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -526,10 +533,20 @@ class GlobalExceptionHandlerTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-common:test --tests "*GlobalExceptionHandlerTest*"`
+Run: `./gradlew :module-common:test --tests "*GlobalExceptionHandlerTest*"`
 Expected: 编译失败（类不存在）。
 
-- [ ] **Step 3: 写实现**
+- [ ] **Step 3: 写实现（先补测试依赖）**
+
+在 `gradle/libs.versions.toml` 的 `[libraries]` 段末尾追加:
+```toml
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+```
+
+在 `buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt` 的 `apply()` 里，`libs.findLibrary("mockk")` 一行之后追加:
+```kotlin
+        project.dependencies.add("testImplementation", libs.findLibrary("kotlin-test").get())
+```
 
 `ApiResponse.kt`:
 ```kotlin
@@ -588,7 +605,8 @@ class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException::class)
     fun handleBusiness(e: BusinessException): ResponseEntity<ApiResponse<Unit>> =
-        ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.error(e.code, e.message))
+        // RuntimeException.message 为 String?，需兜底
+        ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.error(e.code, e.message ?: "business error"))
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun handleValidation(e: MethodArgumentNotValidException): ResponseEntity<ApiResponse<Unit>> {
@@ -607,13 +625,13 @@ class GlobalExceptionHandler {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :module-common:test --tests "*GlobalExceptionHandlerTest*"`
-Expected: PASS（3 个测试全绿）。
+Run: `./gradlew :module-common:test --tests "*GlobalExceptionHandlerTest*"`
+Expected: PASS（3 个测试全绿，JUnit XML 显示 tests="3" failures="0"）。
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add module-common/src
+git add module-common/src gradle/libs.versions.toml buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt
 git commit -m "feat(common): unified response, page, exception handling"
 ```
 
