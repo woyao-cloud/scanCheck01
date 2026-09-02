@@ -4197,7 +4197,7 @@ Expected: PASS。
 - [ ] **Step 6: Commit**
 
 ```bash
-git add module-rule/src app-server/src/main/resources/db/migration
+git add module-rule/src app-server/src/main/resources/db/migration app-server/src/test/kotlin/com/example/compliance/rule
 git commit -m "feat(rule): rule registry with engine bindings and evaluation policy"
 ```
 
@@ -4262,6 +4262,7 @@ class FingerprintGeneratorTest {
 package com.example.compliance.result.application
 
 import com.example.compliance.result.domain.Finding
+import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingTraceRepository
 import com.example.compliance.result.infrastructure.FingerprintGenerator
@@ -4293,7 +4294,7 @@ class FindingServiceTest {
     @Test
     fun `existing fingerprint increments occurrence and records UPDATED trace`() {
         every { findingRepository.findByFingerprint(any()) } returns
-            Finding().apply { id = 9L; occurrenceCount = 1; status = "FIXED" }
+            Finding().apply { id = 9L; occurrenceCount = 1; status = FindingStatus.FIXED }
         val result = service.upsertByFingerprint(1L, 100L, "SEMGREP", listOf(newFinding("SEC-001", "A.java", 1)))
         assertEquals(1, result.updated)
         verify { traceRepository.save(match { it.action == "UPDATED" }) }
@@ -4386,6 +4387,8 @@ package com.example.compliance.result.domain
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.time.Instant
 
 @Entity
@@ -4422,6 +4425,7 @@ class Finding : BaseEntity() {
     var lastSeenAt: Instant = Instant.now()
     @Column(name = "occurrence_count", nullable = false)
     var occurrenceCount: Int = 1
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_json", columnDefinition = "jsonb")
     var rawJson: String? = null
     @Version
