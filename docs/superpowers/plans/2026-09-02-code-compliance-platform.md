@@ -30,7 +30,7 @@
 以下为计划最终落地的关键文件（每个任务会给出该任务的精确文件清单；此图用于把握全局）：
 
 ```text
-buildSrc/src/main/kotlin/compliance-kotlin-module.gradle.kts   # 约定插件（kotlin+spring+jpa+toolchain21+test）
+buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt  # 约定插件（kotlin+spring+jpa+toolchain21+test，类插件）
 gradle/libs.versions.toml                                     # 版本目录
 settings.gradle.kts                                           # 15 模块 include
 build.gradle.kts                                              # 根构建
