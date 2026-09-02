@@ -1,0 +1,28 @@
+# Gradle / Kotlin
+.gradle/
+build/
+.kotlin/
+out/
+bin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Env / local secrets
+local.properties
+.env
+*.env
+
+# Test / coverage
+coverage/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SDD scratch workspace (git-ignored by design)
+.superpowers/
