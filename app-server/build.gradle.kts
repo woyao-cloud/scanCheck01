@@ -21,6 +21,10 @@ dependencies {
     runtimeOnly(libs.postgresql)
     runtimeOnly(libs.flyway.core)
     runtimeOnly(libs.flyway.database.postgresql)
+    // Jackson cannot deserialize Kotlin data classes (@RequestBody DTOs) without jackson-module-kotlin;
+    // spring-boot-starter-json does not include it. Assembled here (app-server is the only deployable)
+    // because module-common is frozen for the M-series. Version managed by the spring-boot-dependencies BOM.
+    runtimeOnly("com.fasterxml.jackson.module:jackson-module-kotlin")
     testImplementation(libs.testcontainers.junit.jupiter)
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.spring.security.test)
