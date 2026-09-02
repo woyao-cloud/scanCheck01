@@ -32,9 +32,9 @@ class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
 
     @Test
     fun `standard checklist publish bind then query items`() {
-        val standardId = idOf(postJson("/api/v1/compliance/standards", """{"code":"SEC","name":"安全编码规范"}"""))
-        val checklistId = idOf(postJson("/api/v1/compliance/checklists", """{"standardId":$standardId,"code":"SEC-BASIC","name":"安全基线"}"""))
-        postJson("/api/v1/compliance/checklists/$checklistId/versions", """{"itemCode":"SEC-001","name":"禁止SQL注入","riskLevel":"HIGH"}""")
+        val standardId = idOf(postJson("/api/v1/compliance/standards", """{"code":"SEC2","name":"安全编码规范"}"""))
+        val checklistId = idOf(postJson("/api/v1/compliance/checklists", """{"standardId":$standardId,"code":"SEC2-BASIC","name":"安全基线"}"""))
+        postJson("/api/v1/compliance/checklists/$checklistId/versions", """{"itemCode":"SEC2-001","name":"禁止SQL注入","riskLevel":"HIGH"}""")
         val publishBody = postJson("/api/v1/compliance/checklists/$checklistId/publish", "")
         val versionId = idOf(publishBody)
 
@@ -42,6 +42,6 @@ class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
 
         mockMvc.perform(get("/api/v1/projects/1/checklists"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data[0].itemCode").value("SEC-001"))
+            .andExpect(jsonPath("$.data[0].itemCode").value("SEC2-001"))
     }
 }
