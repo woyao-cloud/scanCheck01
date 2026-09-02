@@ -3255,7 +3255,9 @@ class ChecklistService(
         val saved = versionRepository.save(version)
         auditService.record(
             "CHECKLIST_PUBLISH", "checklist", null, "checklist_version",
-            saved.id, "checklist=$checklistId version=${saved.versionNo}", null,
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — plain-text detail fails INSERT with
+            // "invalid input syntax for type json" → 500. Must be a valid JSON object.
+            saved.id, """{"checklist":$checklistId,"version":"${saved.versionNo}"}""", null,
         )
         return saved
     }
@@ -3272,7 +3274,7 @@ class ChecklistService(
         })
         auditService.record(
             "CHECKLIST_BIND", "checklist", null, "project",
-            projectId, "checklistVersion=$checklistVersionId", null,
+            projectId, """{"checklistVersion":$checklistVersionId}""", null,
         )
         return binding
     }
@@ -3502,9 +3504,11 @@ class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
 
     @Test
     fun `standard checklist publish bind then query items`() {
-        val standardId = idOf(postJson("/api/v1/compliance/standards", """{"code":"SEC","name":"安全编码规范"}"""))
-        val checklistId = idOf(postJson("/api/v1/compliance/checklists", """{"standardId":$standardId,"code":"SEC-BASIC","name":"安全基线"}"""))
-        postJson("/api/v1/compliance/checklists/$checklistId/versions", """{"itemCode":"SEC-001","name":"禁止SQL注入","riskLevel":"HIGH"}""")
+        // Ruling #34: SEC/SEC-BASIC/SEC-001 are used by the frozen Task 3.1 ChecklistRepositoryIntegrationTest
+        // in the SAME :app-server:test JVM/container → duplicate unique key. These SEC2* codes are disjoint.
+        val standardId = idOf(postJson("/api/v1/compliance/standards", """{"code":"SEC2","name":"安全编码规范"}"""))
+        val checklistId = idOf(postJson("/api/v1/compliance/checklists", """{"standardId":$standardId,"code":"SEC2-BASIC","name":"安全基线"}"""))
+        postJson("/api/v1/compliance/checklists/$checklistId/versions", """{"itemCode":"SEC2-001","name":"禁止SQL注入","riskLevel":"HIGH"}""")
         val publishBody = postJson("/api/v1/compliance/checklists/$checklistId/publish", "")
         val versionId = idOf(publishBody)
 
@@ -3512,7 +3516,7 @@ class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
 
         mockMvc.perform(get("/api/v1/projects/1/checklists"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data[0].itemCode").value("SEC-001"))
+            .andExpect(jsonPath("$.data[0].itemCode").value("SEC2-001"))
     }
 }
 ```
@@ -3747,6 +3751,8 @@ package com.example.compliance.rule.domain
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 
 @Entity
 @Table(name = "rule_engine_binding")
@@ -3757,6 +3763,11 @@ class RuleEngineBinding : BaseEntity() {
     lateinit var engine: String
     @Column(name = "engine_rule_id", nullable = false, length = 128)
     lateinit var engineRuleId: String
+    // Ruling #33: String on a jsonb column binds as varchar without @JdbcTypeCode (Ruling #13/#25
+    // pattern) — INSERT fails "column is of type jsonb but expression is of type character varying".
+    // Not exercised by Task 3.3's tests (engineConfigJson/policyJson never written there), but M4's
+    // rule-policy writes would hit it. Annotation required now.
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "engine_config_json", columnDefinition = "jsonb")
     var engineConfigJson: String? = null
     @Version
@@ -3788,6 +3799,8 @@ package com.example.compliance.rule.domain
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 
 @Entity
 @Table(name = "rule_evaluation_policy")
@@ -3796,6 +3809,7 @@ class RuleEvaluationPolicy : BaseEntity() {
     var ruleId: Long = 0
     @Column(name = "result_on_match", nullable = false, length = 16)
     var resultOnMatch: String = "FAIL"
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "policy_json", columnDefinition = "jsonb")
     var policyJson: String? = null
     @Column(name = "sp_el_expression")
@@ -3984,7 +3998,9 @@ class RuleService(
         val saved = ruleRepository.save(rule)
         auditService.record(
             "RULE_PUBLISH", "rule", null, "rule_definition",
-            saved.id, "rule=${saved.ruleCode}", null,
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — plain-text detail fails INSERT with
+            // "invalid input syntax for type json" → 500. Same defect as Task 3.2's publish/bindProject.
+            saved.id, """{"rule":"${saved.ruleCode}"}""", null,
         )
         return saved
     }
@@ -3996,7 +4012,9 @@ class RuleService(
         val saved = ruleRepository.save(rule)
         auditService.record(
             "RULE_DISABLE", "rule", null, "rule_definition",
-            saved.id, "rule=${saved.ruleCode}", null,
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — plain-text detail fails INSERT with
+            // "invalid input syntax for type json" → 500. Same defect as Task 3.2's publish/bindProject.
+            saved.id, """{"rule":"${saved.ruleCode}"}""", null,
         )
         return saved
     }
