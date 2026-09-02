@@ -971,7 +971,6 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 
 @SpringBootTest
-@Testcontainers
 @ActiveProfiles("test")
 abstract class AbstractIntegrationTest {
     companion object {
@@ -981,12 +980,19 @@ abstract class AbstractIntegrationTest {
             System.setProperty("api.version", "1.44")
         }
 
-        @Container
+        // One PostgreSQL container per test JVM, started once from the companion object.
+        // NOTE (Task 1.1 deviation, root cause = latent M0 harness defect, see Ruling #19):
+        // Testcontainers 1.20.4 stops a static @Container at the END of each test class and
+        // starts a fresh one (new random host port) for the next class; Spring's CACHED test
+        // context still points at the dead port, so the second integration-test class in a JVM
+        // fails with "Connection refused" / Hikari timeout. Starting the container here (once per
+        // JVM) keeps the port stable; Ryuk cleans up at JVM exit. Do NOT re-add @Testcontainers.
         @JvmStatic
         val postgres: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:16")
             .withDatabaseName("compliance")
             .withUsername("compliance")
             .withPassword("compliance")
+            .apply { start() }
 
         @JvmStatic
         @DynamicPropertySource
@@ -1275,6 +1281,7 @@ git commit -m "feat(user): user/role entities with flyway migration"
 **Files:**
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/application/CreateUserCommand.kt`
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/application/UserService.kt`
+- Create: `module-user/src/main/kotlin/com/example/compliance/user/config/PasswordEncoderConfig.kt`  <!-- Ruling #21: PasswordEncoder bean must exist BEFORE Task 1.3 (UserService injects it at context startup); Spring Boot auto-configures none. -->
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/dto/UserRequest.kt`
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/dto/UserResponse.kt`
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/UserController.kt`
@@ -1362,6 +1369,22 @@ data class CreateUserCommand(
     val email: String?,
     val roleCodes: List<String>,
 )
+```
+
+`PasswordEncoderConfig.kt` (Ruling #21 — UserService injects `PasswordEncoder` at context startup, and Spring Boot auto-configures no such bean; Task 1.3's SecurityConfig must NOT redefine this bean):
+```kotlin
+package com.example.compliance.user.config
+
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
+import org.springframework.security.crypto.password.PasswordEncoder
+
+@Configuration
+class PasswordEncoderConfig {
+    @Bean
+    fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder()
+}
 ```
 
 `UserService.kt`:
@@ -1509,12 +1532,20 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.http.MediaType
+import org.springframework.security.test.context.support.WithMockUser
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
+// Ruling #22: module-common exposes spring-boot-starter-security, so Spring Security is on the
+// classpath but no SecurityConfig exists until Task 1.3. Spring Boot's default chain then secures
+// ALL endpoints AND leaves CSRF enabled → without @WithMockUser + csrf(), POST /api/v1/users would
+// return 403/401 instead of 200/400. @WithMockUser still works after Task 1.3 (JwtAuthenticationFilter
+// no-ops without a Bearer header; CSRF is disabled globally there, so .with(csrf()) is harmless).
 @AutoConfigureMockMvc
+@WithMockUser
 class UserApiIntegrationTest : AbstractIntegrationTest() {
 
     @Autowired lateinit var mockMvc: MockMvc
@@ -1523,6 +1554,7 @@ class UserApiIntegrationTest : AbstractIntegrationTest() {
     fun `create user returns id and validation rejects blank username`() {
         mockMvc.perform(
             post("/api/v1/users")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""{"username":"carol","password":"secret1","displayName":"Carol"}""")
         ).andExpect(status().isOk)
@@ -1531,6 +1563,7 @@ class UserApiIntegrationTest : AbstractIntegrationTest() {
 
         mockMvc.perform(
             post("/api/v1/users")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""{"username":"","password":"secret1"}""")
         ).andExpect(status().isBadRequest)
@@ -1572,10 +1605,10 @@ git commit -m "feat(user): user service and REST API"
 ```kotlin
 package com.example.compliance.auth.application
 
+import io.jsonwebtoken.ExpiredJwtException
 import org.junit.jupiter.api.Test
-import java.util.Date
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class JwtServiceTest {
     private val secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -1594,7 +1627,9 @@ class JwtServiceTest {
     fun `expired token is rejected`() {
         val expired = JwtService(secret, 0)
         val token = expired.issue(1L, "alice", emptyList())
-        assertTrue(expired.parse(token).payload.expiration.before(Date()))
+        // Ruling #23: jjwt's parseSignedClaims THROWS ExpiredJwtException on expired tokens —
+        // it never returns claims, so assert the rejection instead of reading .payload.
+        assertFailsWith<ExpiredJwtException> { expired.parse(token) }
     }
 
     @Test
@@ -1656,12 +1691,12 @@ import com.example.compliance.auth.application.JwtService
 import com.example.compliance.user.application.UserService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpStatus
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
-import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.authentication.HttpStatusEntryPoint
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 
 @Configuration
@@ -1670,13 +1705,18 @@ class SecurityConfig(
     private val jwtService: JwtService,
     private val userService: UserService,
 ) {
-    @Bean
-    fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder()
+    // NO passwordEncoder() bean here — the single PasswordEncoder bean lives in
+    // module-user's PasswordEncoderConfig (Task 1.2, Ruling #21). Defining a second one
+    // would fail the context (Boot 3 default disallows bean-definition overriding).
 
     @Bean
     fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
         http.csrf { it.disable() }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
+            // Ruling #23: without an explicit entry point, HttpSecurity's default is
+            // Http403ForbiddenEntryPoint → unauthenticated requests get 403, but a JWT API
+            // must answer 401 (constraint 7). AuthIntegrationTest asserts isUnauthorized.
+            .exceptionHandling { it.authenticationEntryPoint(HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)) }
             .authorizeHttpRequests { auth ->
                 auth.requestMatchers(
                     "/api/v1/auth/login",
