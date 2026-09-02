@@ -29,7 +29,9 @@ class UserRepositoryIntegrationTest : AbstractIntegrationTest() {
 
     @Test
     fun `role and user-role mapping persist`() {
-        val role = roleRepository.save(Role().apply { code = "ADMIN"; name = "管理员" })
+        // Ruling #27: code must not collide with Task 1.3 DataInitializer's seeded role codes
+        // (ADMIN/COMPLIANCE_MANAGER/PROJECT_OWNER/DEVELOPER/AUDITOR) — sys_role.code is UNIQUE.
+        val role = roleRepository.save(Role().apply { code = "TEST_ROLE"; name = "测试角色" })
         val user = userRepository.save(User().apply { username = "bob"; passwordHash = "h" })
         userRoleRepository.save(UserRole().apply { userId = user.id!!; roleId = role.id!! })
         assertEquals(listOf(role.id), userRoleRepository.findByUserId(user.id!!).map { it.roleId })
