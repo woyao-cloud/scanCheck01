@@ -1,0 +1,27 @@
+{
+  "errors": [],
+  "results": [
+    {
+      "check_id": "java.lang.security.audit.sql-injection",
+      "path": "src/main/java/com/demo/OrderDao.java",
+      "start": { "line": 42, "col": 9 },
+      "end": { "line": 42, "col": 80 },
+      "extra": {
+        "message": "Detected potential SQL injection.",
+        "severity": "ERROR",
+        "lines": "String sql = \"select * from t where id=\" + id;"
+      }
+    },
+    {
+      "check_id": "java.lang.security.audit.cookie-http-only",
+      "path": "src/main/java/com/demo/CookieUtil.java",
+      "start": { "line": 17, "col": 5 },
+      "end": { "line": 17, "col": 40 },
+      "extra": {
+        "message": "Cookie not marked HttpOnly.",
+        "severity": "WARNING",
+        "lines": "response.addCookie(cookie);"
+      }
+    }
+  ]
+}
