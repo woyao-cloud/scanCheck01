@@ -38,6 +38,7 @@ class SecurityConfig(
                     "/swagger-ui.html",
                     "/actuator/health",
                 ).permitAll()
+                auth.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 auth.anyRequest().authenticated()
             }
             .addFilterBefore(
