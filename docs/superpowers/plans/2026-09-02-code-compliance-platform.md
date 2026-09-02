@@ -2261,7 +2261,7 @@ git commit -m "feat(project): project/repo entities, credential encryption"
 
 **Interfaces:**
 - Consumes: `ProjectRepository`、`RepoRepository`、`CredentialCrypto`（Task 2.1）。
-- Produces: `ProjectService.create(CreateProjectCommand): Project`；`ProjectService.get(id): Project`；`ProjectService.list(): List<Project>`；`ProjectService.bindRepository(projectId, BindRepositoryCommand): Repository`；`ProjectService.listRepositories(projectId): List<Repository>`；`ProjectController`（`GET/POST /api/v1/projects`、`GET/PUT /api/v1/projects/{id}`、`POST/GET /api/v1/projects/{id}/repositories`）。
+- Produces: `ProjectService.create(CreateProjectCommand): Project`；`ProjectService.get(id): Project`；`ProjectService.list(): List<Project>`；`ProjectService.bindRepository(projectId, BindRepositoryCommand): Repository`；`ProjectService.listRepositories(projectId): List<Repository>`；`ProjectController`（`GET/POST /api/v1/projects`、`GET /api/v1/projects/{id}`、`POST/GET /api/v1/projects/{id}/repositories`）。
 
 - [ ] **Step 1: 写失败测试（单元）**
 
@@ -2587,7 +2587,7 @@ git add module-project/src app-server/src
 git commit -m "feat(project): project and repository REST API"
 ```
 
-**M2 完成标准**：项目/仓库 CRUD 与凭据加密可用，单元 + 集成测试全绿。
+**M2 完成标准**：项目创建/查询、仓库绑定/查询与凭据加密可用，单元 + 集成测试全绿。（Ruling #30：Update/Delete 端点未纳入本计划任何任务——代码块与 Produces 签名一致；如需，作为后续小任务补充。）
 
 ---
 
