@@ -2816,6 +2816,7 @@ import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 import java.time.Instant
@@ -2852,6 +2853,7 @@ import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import java.math.BigDecimal
 import java.time.Instant
 
@@ -3057,6 +3059,10 @@ class ChecklistServiceTest {
 
     @Test
     fun `createChecklist creates checklist plus first draft version V1`() {
+        // Ruling #32: relaxed MockK defaults Boolean to false → unstubbed existsById(1L) would
+        // make createChecklist throw BusinessException(404) (standard not found) and fail this test.
+        // Task 2.2's green test stubbed existsByCode explicitly for the same reason (Ruling #13/#26 pattern).
+        every { standardRepository.existsById(1L) } returns true
         every { checklistRepository.save(any()) } answers {
             firstArg<ComplianceChecklist>().apply { id = 10L }
         }
@@ -3469,19 +3475,26 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.http.MediaType
+import org.springframework.security.test.context.support.WithMockUser
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
+// Ruling #32: Task 3.2 runs AFTER Task 1.3, whose SecurityConfig requires authentication for
+// everything except login/swagger/health. Without @WithMockUser, every request here → 401 (same
+// defect pattern as Ruling #22/#24 — Task 1.2/2.2's tests were patched, this one was authored
+// without it). CSRF is disabled globally since Task 1.3, so .with(csrf()) is harmless belt-and-suspenders.
 @AutoConfigureMockMvc
+@WithMockUser
 class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
 
     @Autowired lateinit var mockMvc: MockMvc
 
     private fun postJson(url: String, json: String): String =
-        mockMvc.perform(post(url).contentType(MediaType.APPLICATION_JSON).content(json))
+        mockMvc.perform(post(url).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(json))
             .andExpect(status().isOk).andReturn().response.contentAsString
 
     private fun idOf(body: String): Long = com.fasterxml.jackson.databind.ObjectMapper()
