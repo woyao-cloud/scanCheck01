@@ -10,10 +10,13 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
-import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 
-@Component
+// Ruling #28: NOT a @Component. Spring Boot auto-registers every Filter bean as a servlet-level
+// filter OUTSIDE the FilterChainProxy; SecurityConfig also constructs this class and adds it to the
+// security chain via addFilterBefore — a @Component would run the JWT logic twice per Bearer request
+// (double parse + 2x findByUsername/findRoles). The manual chain registration covers ordering; the
+// filter is not injected anywhere else.
 class JwtAuthenticationFilter(
     private val jwtService: JwtService,
     private val userService: UserService,

@@ -1626,7 +1626,10 @@ class JwtServiceTest {
         val token = jwtService.issue(1L, "alice", listOf("ROLE_ADMIN"))
         val claims = jwtService.parse(token).payload
         assertEquals("alice", claims.subject)
-        assertEquals(1L, claims.get("uid", Long::class.java))
+        // D1 (Ruling #28): brief's Long::class.java is the PRIMITIVE long.class in Kotlin; jjwt 0.12.6
+        // castClaimValue only coerces numbers to the BOXED Long.class → RequiredTypeException. Use
+        // javaObjectType (= java.lang.Long). Round-trip intent unchanged.
+        assertEquals(1L, claims.get("uid", Long::class.javaObjectType))
         assertEquals(listOf("ROLE_ADMIN"), claims.get("roles", List::class.java))
     }
 
@@ -1757,10 +1760,12 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
-import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 
-@Component
+// Ruling #28: NOT a @Component. Spring Boot auto-registers every Filter bean as a servlet-level
+// filter OUTSIDE the FilterChainProxy; SecurityConfig also constructs this class and adds it to the
+// security chain via addFilterBefore — a @Component would run the JWT logic twice per Bearer request
+// (double parse + 2x findByUsername/findRoles). The manual chain registration covers ordering.
 class JwtAuthenticationFilter(
     private val jwtService: JwtService,
     private val userService: UserService,
