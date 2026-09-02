@@ -670,7 +670,7 @@ class AuditServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-common:test --tests "*AuditServiceTest*"`
+Run: `./gradlew :module-common:test --tests "*AuditServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -800,7 +800,7 @@ class CommonConfig
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :module-common:test --tests "*AuditServiceTest*"`
+Run: `./gradlew :module-common:test --tests "*AuditServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: Commit**
