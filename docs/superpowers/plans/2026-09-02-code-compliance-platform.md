@@ -1285,6 +1285,7 @@ git commit -m "feat(user): user/role entities with flyway migration"
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/dto/UserRequest.kt`
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/dto/UserResponse.kt`
 - Create: `module-user/src/main/kotlin/com/example/compliance/user/api/UserController.kt`
+- Modify: `app-server/build.gradle.kts` — add `runtimeOnly("com.fasterxml.jackson.module:jackson-module-kotlin")` (Ruling #26: spring-boot-starter-json does NOT include Kotlin support; without it every `@RequestBody` Kotlin DTO deserialization 500s. Needed by every future module controller.)
 - Test: `module-user/src/test/kotlin/com/example/compliance/user/application/UserServiceTest.kt`
 - Test: `app-server/src/test/kotlin/com/example/compliance/user/UserApiIntegrationTest.kt`
 
@@ -1322,8 +1323,11 @@ class UserServiceTest {
     @Test
     fun `create user encodes password and assigns roles`() {
         every { userRepository.existsByUsername("alice") } returns false
-        every { roleRepository.findByCode("ADMIN") } returns Role().apply { code = "ADMIN" }
+        // Ruling #26 (Task 1.2 fixes): role needs a non-null id (UserService does role.id!!);
+        // userRoleRepository.save needs an explicit stub (MockK erasure on JpaRepository.save).
+        every { roleRepository.findByCode("ADMIN") } returns Role().apply { id = 7L; code = "ADMIN" }
         every { userRepository.save(any()) } answers { firstArg<User>().apply { id = 1L } }
+        every { userRoleRepository.save(any()) } returnsArgument 0
 
         service.createUser(CreateUserCommand("alice", "secret", "Alice", "a@x.com", listOf("ADMIN")))
 
@@ -1505,7 +1509,8 @@ class UserController(private val userService: UserService) {
         @RequestParam(defaultValue = "20") size: Int,
     ): ApiResponse<PageResponse<UserResponse>> {
         val result = userService.page(PageRequest.of((page - 1).coerceAtLeast(0), size.coerceIn(1, 100)))
-        return ApiResponse.ok(PageResponse(result.map { it.toResponse() }, page, size, result.totalElements))
+        // Ruling #26 (Task 1.2 fix): Page.map returns Page, not List — use Page.getContent().
+        return ApiResponse.ok(PageResponse(result.content.map { it.toResponse() }, page, size, result.totalElements))
     }
 
     @GetMapping("/{id}/roles")
