@@ -23,7 +23,6 @@ import com.example.compliance.scan.infrastructure.ScanTaskRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
@@ -46,8 +45,11 @@ class ScanOrchestrator(
     private val objectMapper = ObjectMapper()
 
     /** 全流水线：RUNNING → adapter 扫描 → 归一化 → 指纹去重入库 → 合规判定 → 汇总评估。 */
+    // Ruling #52: 刻意不加 @Transactional（同 Ruling #45）—— 每个 repo save 自带事务立即提交，
+    // catch 里的 FAILED 写入必然落库。若加外层 @Transactional，来自事务性协作方（如
+    // FindingService.upsertByFingerprint）的异常会把共享事务标记 rollback-only，commit 时报
+    // UnexpectedRollbackException，FAILED 写入被回滚 → 任务永远卡在 PENDING。
     @Async("scanExecutor")
-    @Transactional
     fun executeAsync(scanTaskId: Long) {
         val task = scanTaskRepository.findById(scanTaskId)
             .orElseThrow { BusinessException(404, "scan task not found: $scanTaskId") }
