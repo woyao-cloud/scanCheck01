@@ -4947,7 +4947,7 @@ git commit -m "feat(engine-adapter): semgrep adapter with json parser and severi
 
 **Interfaces:**
 - Consumes: `module-project`（`ProjectService.get`、`RepoRepository.findByProjectId`）；`module-rule`（`RuleQueryService.publishedRuleByEngineRuleId` / `policyByRuleId` / `itemCodesByRuleId`、`findByRuleCode`）；`module-checklist`（`ChecklistQueryService.publishedItemsForProject`、`ItemResult`）；`module-result`（`ScanEngineAdapter`/`ScanContext`/`ScanResult`、`EngineAdapterRegistry`、`FindingService`/`NewFinding`/`UpsertResult`、`FindingRepository.findByScanTaskId`）。
-- Produces: `ScanTask`（PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED）；`ScanTaskService.startScan(projectId, engine, ref): ScanTask`、`cancel(id): ScanTask`（仅 PENDING 可取消）、`complianceResults(scanTaskId): ComplianceResultView`；`ScanOrchestrator.executeAsync(scanTaskId)`（`@Async("scanExecutor")` 全流水线）；`ComplianceEvaluator.evaluate(projectId, List<Finding>): List<ItemEvaluation>`（SpEL 判定）；`ScanController`（`POST /api/v1/projects/{projectId}/scan-tasks`、`GET /api/v1/scan-tasks/{id}`、`POST /api/v1/scan-tasks/{id}/cancel`、`GET /api/v1/scan-tasks/{id}/findings`、`GET /api/v1/scan-tasks/{id}/compliance-results`）。
+- Produces: `ScanTask`（PENDING/PREPARING/RUNNING/SUCCESS/FAILED/CANCELLED/PARTIAL_SUCCESS，Ruling #46 —— 对齐 spec §TaskStatus 枚举值集）；`ScanTaskService.startScan(projectId, engine, ref): ScanTask`、`cancel(id): ScanTask`（仅 PENDING 可取消）、`complianceResults(scanTaskId): ComplianceResultView`；`ScanOrchestrator.executeAsync(scanTaskId)`（`@Async("scanExecutor")` 全流水线）；`ComplianceEvaluator.evaluate(projectId, List<Finding>): List<ItemEvaluation>`（SpEL 判定）；`ScanController`（`POST /api/v1/projects/{projectId}/scan-tasks`、`GET /api/v1/scan-tasks/{id}`、`POST /api/v1/scan-tasks/{id}/cancel`、`GET /api/v1/scan-tasks/{id}/findings`、`GET /api/v1/scan-tasks/{id}/compliance-results`）。
 
 - [ ] **Step 1: 写失败测试（单元）**
 
@@ -5096,7 +5096,7 @@ CREATE INDEX idx_cir_eval ON checklist_item_result (evaluation_id);
 ```kotlin
 package com.example.compliance.scan.domain
 
-enum class ScanTaskStatus { PENDING, RUNNING, SUCCEEDED, FAILED, CANCELLED }
+enum class ScanTaskStatus { PENDING, PREPARING, RUNNING, SUCCESS, FAILED, CANCELLED, PARTIAL_SUCCESS }
 ```
 
 `ScanTask.kt`:
@@ -5225,6 +5225,8 @@ package com.example.compliance.scan.domain
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 
 @Entity
 @Table(name = "checklist_item_result")
@@ -5237,6 +5239,8 @@ class ChecklistItemResult : BaseEntity() {
     lateinit var result: String
     @Column(name = "finding_count", nullable = false)
     var findingCount: Int = 0
+    // Ruling #44: String 存 jsonb 列必须 @JdbcTypeCode(SqlTypes.JSON)（orchestrator 会写入 matchedFindingIds）
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "matched_finding_ids", columnDefinition = "jsonb")
     var matchedFindingIds: String? = null
 }
@@ -5381,8 +5385,10 @@ class ScanTaskService(
     private val itemResultRepository: ChecklistItemResultRepository,
     private val orchestrator: ScanOrchestrator,
 ) {
-    /** 创建 PENDING 扫描任务并异步启动，立即返回任务。 */
-    @Transactional
+    /** 创建 PENDING 扫描任务并异步启动，立即返回任务。
+     *  Ruling #45: 刻意不加 @Transactional —— save 自带事务立即提交，异步线程的
+     *  findById 才能看到 PENDING 行；若在未提交事务内 dispatch，@Async 线程可能
+     *  先于提交执行 → 任务 404 卡死在 PENDING（executeAsync 的 orElseThrow 在 try 外）。 */
     fun startScan(projectId: Long, engine: String, ref: String?): ScanTask {
         if (registry.get(engine) == null) {
             throw BusinessException(400, "unsupported engine: $engine")
@@ -5520,7 +5526,7 @@ class ScanOrchestrator(
             scanJobRepository.save(ScanJob().apply {
                 this.scanTaskId = scanTaskId
                 engine = task.engine
-                jobStatus = "SUCCEEDED"
+                jobStatus = "SUCCESS"
                 startedAt = task.startedAt
                 finishedAt = Instant.now()
                 durationMs = duration
@@ -5550,7 +5556,7 @@ class ScanOrchestrator(
                 }
             }
 
-            task.status = ScanTaskStatus.SUCCEEDED
+            task.status = ScanTaskStatus.SUCCESS
             task.findingCount = findings.size
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
@@ -5800,16 +5806,17 @@ class ScanPipelineIntegrationTest : AbstractIntegrationTest() {
             project.id!!,
             BindRepositoryCommand("repo-a", "https://git.example.com/a.git", "GITLAB", "main", "tok"),
         )
-        // 2. 标准 → 清单 → 条目 → 发布 → 绑定
-        val standard = checklistService.createStandard("SEC", "安全规范", null)
-        val checklist = checklistService.createChecklist(standard.id!!, "SEC-BASIC", "安全基线")
-        checklistService.addItem(checklist.id!!, com.example.compliance.checklist.application.AddItemCommand("SEC-001", "防注入", "HIGH"))
+        // 2. 标准 → 清单 → 条目 → 发布 → 绑定（PIPE-* 系列：与冻结 Task 3.1 的 SEC-* / Task 3.2 的 SEC2-* 在同一共享容器中必须 disjoint，Ruling #43）
+        val standard = checklistService.createStandard("PIPE-SEC", "安全规范", null)
+        val checklist = checklistService.createChecklist(standard.id!!, "PIPE-BASIC", "安全基线")
+        // Ruling #47: 用命名参数，riskLevel=HIGH（第 3 个位置形参是 category 不是 riskLevel）
+        checklistService.addItem(checklist.id!!, com.example.compliance.checklist.application.AddItemCommand(itemCode = "PIPE-001", name = "防注入", riskLevel = "HIGH"))
         val version = checklistService.publish(checklist.id!!)
         checklistService.bindProject(project.id!!, version.id!!)
         // 3. 规则：引擎绑定 + 清单映射 + FAIL 策略（severity==HIGH）
         val rule = ruleService.create(CreateRuleCommand("STUB-SQLI", "Stub注入", "HIGH", null))
         ruleService.addEngineBinding(rule.id!!, AddEngineBindingCommand("STUB", "stub-rule-sqli", null))
-        ruleService.addComplianceMapping(rule.id!!, "SEC-001")
+        ruleService.addComplianceMapping(rule.id!!, "PIPE-001")
         ruleService.setEvaluationPolicy(rule.id!!, SetPolicyCommand("FAIL", null, "severity == 'HIGH'"))
         ruleService.publish(rule.id!!)
         // 4. 触发扫描并轮询等待完成
@@ -5823,7 +5830,7 @@ class ScanPipelineIntegrationTest : AbstractIntegrationTest() {
         }
         kotlin.test.assertTrue(done, "scan should finish within timeout")
         val finished = scanTaskService.get(task.id!!)
-        kotlin.test.assertEquals(ScanTaskStatus.SUCCEEDED, finished.status)
+        kotlin.test.assertEquals(ScanTaskStatus.SUCCESS, finished.status)
         kotlin.test.assertEquals(1, scanTaskService.findings(task.id!!).size)
     }
 }
@@ -5913,7 +5920,7 @@ class ReportServiceTest {
     @Test
     fun `scanSummary groups findings by severity`() {
         every { scanTaskRepository.findById(1L) } returns Optional.of(
-            ScanTask().apply { id = 1L; projectId = 1L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCEEDED }
+            ScanTask().apply { id = 1L; projectId = 1L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCESS }
         )
         every { findingRepository.findByScanTaskId(1L) } returns listOf(
             Finding().apply { severity = "HIGH" },
@@ -6218,7 +6225,7 @@ docker compose up -d postgres    # 起 PostgreSQL 16（M0 已提供 docker-compo
   2. `POST /api/v1/projects` 建项目 → `POST /api/v1/projects/{id}/repositories` 绑仓库
   3. `POST /api/v1/compliance/standards` → `POST /api/v1/compliance/checklists` → `POST /api/v1/compliance/checklists/{id}/versions`（添加清单项）→ `POST /api/v1/compliance/checklists/{id}/publish` → `POST /api/v1/projects/{id}/bind-checklist`
   4. `POST /api/v1/rules` → `POST /api/v1/rules/{id}/engine-bindings` → `POST /api/v1/rules/{id}/mappings` → `POST /api/v1/rules/{id}/policy` → `POST /api/v1/rules/{id}/publish`
-  5. `POST /api/v1/projects/{id}/scan-tasks`（body: `{"engine":"SEMGREP","ref":"main"}`；需机器装 semgrep；configJson 可给 `{"localPath":"/tmp/repo"}` 指向本地检出目录以便离线演示）→ 轮询 `GET /api/v1/scan-tasks/{id}` 至 SUCCEEDED
+  5. `POST /api/v1/projects/{id}/scan-tasks`（body: `{"engine":"SEMGREP","ref":"main"}`；需机器装 semgrep；configJson 可给 `{"localPath":"/tmp/repo"}` 指向本地检出目录以便离线演示）→ 轮询 `GET /api/v1/scan-tasks/{id}` 至 SUCCESS
   6. `GET /api/v1/reports/scan-summary?taskId={id}`、`GET /api/v1/reports/compliance-summary?projectId={id}`、`GET /api/v1/reports/trend?projectId={id}&days=30`
 
 ### 里程碑验收标准汇总
