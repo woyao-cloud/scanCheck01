@@ -248,6 +248,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // 注意：预编译脚本插件的 plugins 块无法访问 version catalog（Gradle 官方限制），
 // 因此插件版本在此显式给出；依赖通过 VersionCatalogsExtension 显式取 catalog。
 plugins {
+    id("java-library")  // 提供 api() 配置（module-common 用 api 向下游暴露共享技术栈）
     kotlin("jvm") version "2.0.21"
     kotlin("plugin.spring") version "2.0.21"
     kotlin("plugin.jpa") version "2.0.21"
