@@ -29,6 +29,8 @@ app:
     command: semgrep
     working-dir: /tmp/compliance-scan
     timeout-seconds: 300
+  credential:
+    secret: "0123456789abcdef0123456789abcdef"   # 生产环境改由环境变量注入
 
 springdoc:
   swagger-ui:
