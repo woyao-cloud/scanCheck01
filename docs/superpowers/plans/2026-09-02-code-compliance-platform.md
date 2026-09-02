@@ -202,7 +202,7 @@ kotlin.code.style=official
 
 - [ ] **Step 4: 验证**
 
-Run: `gradle projects`
+Run: `./gradlew projects`
 Expected: 列出 root project，`./gradlew` 可用（若本机 gradle 8.2.1 直接可用则无需 wrapper；建议执行 `gradle wrapper --gradle-version 8.8` 生成 wrapper 提交）。
 
 - [ ] **Step 5: Commit**
@@ -1112,7 +1112,7 @@ class UserRepositoryIntegrationTest : AbstractIntegrationTest() {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :app-server:test --tests "*UserRepositoryIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*UserRepositoryIntegrationTest*"`
 Expected: 编译失败（类不存在）；Flyway V2 不存在。
 
 - [ ] **Step 3: 写 Flyway V2 与实体**
@@ -1260,7 +1260,7 @@ interface UserRoleRepository : JpaRepository<UserRole, Long> {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :app-server:test --tests "*UserRepositoryIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*UserRepositoryIntegrationTest*"`
 Expected: PASS（2 个测试，真实 PG 建表验证）。
 
 - [ ] **Step 5: Commit**
@@ -1346,7 +1346,7 @@ class UserServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-user:test --tests "*UserServiceTest*"`
+Run: `./gradlew :module-user:test --tests "*UserServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -1495,7 +1495,7 @@ class UserController(private val userService: UserService) {
 
 - [ ] **Step 4: 运行单元测试确认通过**
 
-Run: `gradle :module-user:test --tests "*UserServiceTest*"`
+Run: `./gradlew :module-user:test --tests "*UserServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: 写 API 集成测试并运行**
@@ -1538,7 +1538,7 @@ class UserApiIntegrationTest : AbstractIntegrationTest() {
     }
 }
 ```
-Run: `gradle :app-server:test --tests "*UserApiIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*UserApiIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 6: Commit**
@@ -1606,7 +1606,7 @@ class JwtServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-auth:test --tests "*JwtServiceTest*"`
+Run: `./gradlew :module-auth:test --tests "*JwtServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -1841,7 +1841,7 @@ class AuthController(
 
 - [ ] **Step 4: 运行单元测试确认通过**
 
-Run: `gradle :module-auth:test --tests "*JwtServiceTest*"`
+Run: `./gradlew :module-auth:test --tests "*JwtServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: 写 API 集成测试并运行**
@@ -1891,7 +1891,7 @@ class AuthIntegrationTest : AbstractIntegrationTest() {
     }
 }
 ```
-Run: `gradle :app-server:test --tests "*AuthIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*AuthIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 6: 种子角色与管理员**
@@ -1931,7 +1931,7 @@ class DataInitializer(
 
 - [ ] **Step 7: 运行全部 M1 相关测试**
 
-Run: `gradle :module-user:test :module-auth:test :app-server:test --tests "*IntegrationTest*" --tests "*ServiceTest*" --tests "*JwtServiceTest*"`
+Run: `./gradlew :module-user:test :module-auth:test :app-server:test --tests "*IntegrationTest*" --tests "*ServiceTest*" --tests "*JwtServiceTest*"`
 Expected: 全部 PASS。
 
 - [ ] **Step 8: Commit**
@@ -2010,7 +2010,7 @@ class ProjectRepositoryIntegrationTest : AbstractIntegrationTest() {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-project:test :app-server:test --tests "*CredentialCryptoTest*" --tests "*ProjectRepositoryIntegrationTest*"`
+Run: `./gradlew :module-project:test :app-server:test --tests "*CredentialCryptoTest*" --tests "*ProjectRepositoryIntegrationTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写 Flyway V3 与实现**
@@ -2186,7 +2186,7 @@ app:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :module-project:test :app-server:test --tests "*CredentialCryptoTest*" --tests "*ProjectRepositoryIntegrationTest*"`
+Run: `./gradlew :module-project:test :app-server:test --tests "*CredentialCryptoTest*" --tests "*ProjectRepositoryIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: Commit**
@@ -2273,7 +2273,7 @@ class ProjectServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-project:test --tests "*ProjectServiceTest*"`
+Run: `./gradlew :module-project:test --tests "*ProjectServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -2473,7 +2473,7 @@ class ProjectController(private val projectService: ProjectService) {
 
 - [ ] **Step 4: 运行单元测试确认通过**
 
-Run: `gradle :module-project:test --tests "*ProjectServiceTest*"`
+Run: `./gradlew :module-project:test --tests "*ProjectServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: 写 API 集成测试并运行**
@@ -2517,7 +2517,7 @@ class ProjectApiIntegrationTest : AbstractIntegrationTest() {
     }
 }
 ```
-Run: `gradle :app-server:test --tests "*ProjectApiIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ProjectApiIntegrationTest*"`
 Expected: PASS（通过响应读取 projectId 拼接 URL，避免硬编码 id）。
 
 - [ ] **Step 6: Commit**
@@ -2607,7 +2607,7 @@ class ChecklistRepositoryIntegrationTest : AbstractIntegrationTest() {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :app-server:test --tests "*ChecklistRepositoryIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ChecklistRepositoryIntegrationTest*"`
 Expected: 编译失败（类不存在）；Flyway V4 不存在。
 
 - [ ] **Step 3: 写 Flyway V4 与实体**
@@ -2923,7 +2923,7 @@ interface BindingRepository : JpaRepository<ProjectChecklistBinding, Long> {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :app-server:test --tests "*ChecklistRepositoryIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ChecklistRepositoryIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: Commit**
@@ -3051,7 +3051,7 @@ class ChecklistServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-checklist:test --tests "*ChecklistServiceTest*"`
+Run: `./gradlew :module-checklist:test --tests "*ChecklistServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -3385,7 +3385,7 @@ class ChecklistController(
 
 - [ ] **Step 4: 运行单元测试确认通过**
 
-Run: `gradle :module-checklist:test --tests "*ChecklistServiceTest*"`
+Run: `./gradlew :module-checklist:test --tests "*ChecklistServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: 写 API 集成测试并运行**
@@ -3433,7 +3433,7 @@ class ChecklistApiIntegrationTest : AbstractIntegrationTest() {
     }
 }
 ```
-Run: `gradle :app-server:test --tests "*ChecklistApiIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ChecklistApiIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 6: Commit**
@@ -3572,7 +3572,7 @@ class RuleServiceTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-rule:test :app-server:test --tests "*Rule*Test*"`
+Run: `./gradlew :module-rule:test :app-server:test --tests "*Rule*Test*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写 Flyway V5 与实体**
@@ -4090,7 +4090,7 @@ class RuleController(private val ruleService: RuleService) {
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `gradle :module-rule:test :app-server:test --tests "*Rule*Test*"`
+Run: `./gradlew :module-rule:test :app-server:test --tests "*Rule*Test*"`
 Expected: PASS。
 
 - [ ] **Step 6: Commit**
@@ -4229,7 +4229,7 @@ class FindingRepositoryIntegrationTest : AbstractIntegrationTest() {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-result:test :app-server:test --tests "*Fingerprint*" --tests "*Finding*Test*"`
+Run: `./gradlew :module-result:test :app-server:test --tests "*Fingerprint*" --tests "*Finding*Test*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写 Flyway V6 与实现**
@@ -4545,7 +4545,7 @@ class DefaultEngineAdapterRegistry(
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :module-result:test :app-server:test --tests "*Fingerprint*" --tests "*Finding*Test*"`
+Run: `./gradlew :module-result:test :app-server:test --tests "*Fingerprint*" --tests "*Finding*Test*"`
 Expected: PASS。
 
 - [ ] **Step 5: Commit**
@@ -4687,7 +4687,7 @@ class SemgrepAdapterTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-engine-adapter:test`
+Run: `./gradlew :module-engine-adapter:test`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -4806,7 +4806,7 @@ class SemgrepAdapter(
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `gradle :module-engine-adapter:test`
+Run: `./gradlew :module-engine-adapter:test`
 Expected: PASS。
 
 - [ ] **Step 5: Commit**
@@ -4903,7 +4903,7 @@ class ComplianceEvaluatorTest {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `gradle :module-scan:test --tests "*ComplianceEvaluatorTest*"`
+Run: `./gradlew :module-scan:test --tests "*ComplianceEvaluatorTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 3: 写 Flyway V7 与实现（实体、repos、判定、编排、API）**
@@ -5634,7 +5634,7 @@ class ScanController(private val scanTaskService: ScanTaskService) {
 
 - [ ] **Step 4: 运行单元测试确认通过**
 
-Run: `gradle :module-scan:test --tests "*ComplianceEvaluatorTest*"`
+Run: `./gradlew :module-scan:test --tests "*ComplianceEvaluatorTest*"`
 Expected: PASS。
 
 - [ ] **Step 5: 写端到端集成测试**
@@ -5720,12 +5720,12 @@ class ScanPipelineIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-Run: `gradle :app-server:test --tests "*ScanPipelineIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ScanPipelineIntegrationTest*"`
 Expected: PASS。若 `app.credential.secret` 未出现在测试资源，把 Task 2.1 加的配置复制到 `app-server/src/test/resources/application.yml`（或 test 用 profile）。
 
 - [ ] **Step 6: 运行 M4 全部相关测试**
 
-Run: `gradle :module-result:test :module-engine-adapter:test :module-scan:test :app-server:test`
+Run: `./gradlew :module-result:test :module-engine-adapter:test :module-scan:test :app-server:test`
 Expected: 全部 PASS。
 
 - [ ] **Step 7: Commit**
@@ -5843,7 +5843,7 @@ class ReportServiceTest {
 
 - [ ] **Step 3: 运行测试确认失败**
 
-Run: `gradle :module-report:test --tests "*ReportServiceTest*"`
+Run: `./gradlew :module-report:test --tests "*ReportServiceTest*"`
 Expected: 编译失败（类不存在）。
 
 - [ ] **Step 4: 写实现**
@@ -5973,7 +5973,7 @@ class ReportController(private val reportService: ReportService) {
 
 - [ ] **Step 5: 运行单元测试确认通过**
 
-Run: `gradle :module-report:test --tests "*ReportServiceTest*"`
+Run: `./gradlew :module-report:test --tests "*ReportServiceTest*"`
 Expected: PASS。
 
 - [ ] **Step 6: 写 API 集成测试并运行**
@@ -6066,7 +6066,7 @@ class ReportApiIntegrationTest : AbstractIntegrationTest() {
     }
 }
 ```
-Run: `gradle :app-server:test --tests "*ReportApiIntegrationTest*"`
+Run: `./gradlew :app-server:test --tests "*ReportApiIntegrationTest*"`
 Expected: PASS。
 
 - [ ] **Step 7: Commit**
@@ -6086,18 +6086,18 @@ git commit -m "feat(report): scan summary, compliance summary, trend reports"
 实现完成后（M0–M5 全部任务通过），在项目根目录执行并确认全绿：
 
 ```bash
-gradle build            # 编译全部 15 模块 + 全部单元/集成测试（Testcontainers 起 PG）
+./gradlew build            # 编译全部 15 模块 + 全部单元/集成测试（Testcontainers 起 PG）
 ```
 
 重点回归路径（每加一个模块后都跑一次）：
-- `gradle :app-server:test`：集成测试覆盖 auth / project / checklist / rule / result / scan / report。
-- `gradle :module-scan:test --tests "*ComplianceEvaluatorTest*"`：SpEL 判定策略。
+- `./gradlew :app-server:test`：集成测试覆盖 auth / project / checklist / rule / result / scan / report。
+- `./gradlew :module-scan:test --tests "*ComplianceEvaluatorTest*"`：SpEL 判定策略。
 
 ### 本地启动
 
 ```bash
 docker compose up -d postgres    # 起 PostgreSQL 16（M0 已提供 docker-compose.yml）
-gradle :app-server:bootRun       # 启动应用，Flyway 自动执行 V1..V7
+./gradlew :app-server:bootRun       # 启动应用，Flyway 自动执行 V1..V7
 ```
 
 启动后：
