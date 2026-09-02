@@ -44,6 +44,7 @@ class ComplianceKotlinModulePlugin : Plugin<Project> {
         val libs = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
         project.dependencies.add("testImplementation", libs.findLibrary("spring-boot-starter-test").get())
         project.dependencies.add("testImplementation", libs.findLibrary("mockk").get())
+        project.dependencies.add("testImplementation", libs.findLibrary("kotlin-test").get())
 
         project.tasks.withType(Test::class.java).configureEach { useJUnitPlatform() }
     }
