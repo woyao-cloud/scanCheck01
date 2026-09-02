@@ -2,6 +2,8 @@ package com.example.compliance.common.audit
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.time.Instant
 
 @Entity
@@ -22,6 +24,7 @@ class AuditLog : BaseEntity() {
     @Column(name = "resource_id")
     var resourceId: Long? = null
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "detail", columnDefinition = "jsonb")
     var detail: String? = null
 
