@@ -218,62 +218,131 @@ git commit -m "chore: gradle root project with version catalog"
 ### Task 0.2: 约定插件与 15 个模块骨架
 
 **Files:**
-- Create: `buildSrc/src/main/kotlin/compliance-kotlin-module.gradle.kts`
-- Create: `buildSrc/settings.gradle.kts`
+- Create: `buildSrc/build.gradle.kts`（`kotlin-dsl` + 插件实现依赖）
+- Create: `buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt`
+- Create: `buildSrc/src/main/resources/META-INF/gradle-plugins/compliance-kotlin-module.properties`
 - Create: 每个模块的 `build.gradle.kts`（15 个）
 - Create: 每个模块的包占位（如 `module-remediation/src/main/kotlin/com/example/compliance/remediation/package-info.kt`）
+- Modify: `settings.gradle.kts`（根：补 `dependencyResolutionManagement` 仓库声明）
+- Modify: `build.gradle.kts`（根：仅保留 `spring-boot` apply false）
 
 **Interfaces:**
-- Produces: 约定插件 id `compliance-kotlin-module`，提供 Kotlin JVM/Spring/JPA、JDK 21 toolchain、JUnit5 + MockK 测试依赖。
+- Produces: 约定插件 id `compliance-kotlin-module`，提供 Kotlin JVM/Spring/JPA、JDK 21 toolchain、Spring Boot BOM（无版本 starter 坐标的版本来源）、JUnit5 + MockK 测试依赖。
+- Consumes: 根 `settings.gradle.kts` 的默认 `libs` 版本目录（Task 0.1 已建 `gradle/libs.versions.toml`）。
 
-- [ ] **Step 1: 写约定插件**
+> **为什么用 Kotlin 类插件而不是预编译脚本插件**（本任务已用 Gradle 8.8 全量复刻验证）：
+> 1) 预编译脚本插件的 `plugins {}` 块不允许带版本号（Gradle 硬性规则，报 `Invalid plugin request ... must not include a version number`）；
+> 2) 预编译脚本插件内无法使用版本目录 `libs` 的库访问器（`libs.spring.boot.starter.test` 等无法解析）。
+> 因此采用 `Plugin<Project>` 类插件：插件实现（kotlin-gradle-plugin 等）作为 `:buildSrc` 的 `implementation` 依赖提供，
+> 在 `apply()` 里用 `project.plugins.apply("org.jetbrains.kotlin.jvm")` 等无版本应用，
+> 依赖版本通过 `the<VersionCatalogsExtension>().named("libs").findLibrary(...)` 编程式获取。
 
-`buildSrc/settings.gradle.kts`:
+- [ ] **Step 1: 写 buildSrc 约定插件**
+
+`buildSrc/build.gradle.kts`:
 ```kotlin
-dependencyResolutionManagement {
-    repositories { gradlePluginPortal(); mavenCentral() }
-    // buildSrc 是独立构建，不自动继承主构建的 version catalog，必须显式导入
-    versionCatalogs {
-        create("libs") { from(files("../gradle/libs.versions.toml")) }
+plugins {
+    `kotlin-dsl`
+}
+
+repositories {
+    mavenCentral()
+    gradlePluginPortal()
+}
+
+dependencies {
+    // Kotlin 类约定插件需要这些插件实现位于 buildSrc classpath；
+    // 它们会以未知版本进入整个构建的 classpath，因此根 build.gradle.kts 不能再带版本请求（见 Step 2）。
+    implementation("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
+    implementation("org.jetbrains.kotlin.plugin.spring:org.jetbrains.kotlin.plugin.spring.gradle.plugin:2.0.21")
+    implementation("org.jetbrains.kotlin.plugin.jpa:org.jetbrains.kotlin.plugin.jpa.gradle.plugin:2.0.21")
+    implementation("io.spring.dependency-management:io.spring.dependency-management.gradle.plugin:1.1.6")
+}
+```
+
+`buildSrc/src/main/kotlin/com/example/compliance/ComplianceKotlinModulePlugin.kt`:
+```kotlin
+package com.example.compliance
+
+import io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.tasks.testing.Test
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.kotlin.dsl.configure
+import org.gradle.kotlin.dsl.getByType
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
+
+/**
+ * 模块约定插件：为每个业务模块统一配置 Kotlin JVM/Spring/JPA、
+ * JDK 21 toolchain、Spring Boot BOM 与 JUnit5 + MockK 测试依赖。
+ *
+ * 依赖版本通过 VersionCatalogsExtension 从主构建默认 libs 目录编程式解析
+ * （避免预编译脚本插件无法使用目录访问器 / plugins 块不能带版本的限制）。
+ */
+class ComplianceKotlinModulePlugin : Plugin<Project> {
+    override fun apply(project: Project) {
+        project.plugins.apply("java-library")  // 提供 api() 配置（module-common 用 api 暴露共享技术栈）
+        project.plugins.apply("org.jetbrains.kotlin.jvm")
+        project.plugins.apply("org.jetbrains.kotlin.plugin.spring")
+        project.plugins.apply("org.jetbrains.kotlin.plugin.jpa")
+        project.plugins.apply("io.spring.dependency-management")
+
+        project.extensions.configure<JavaPluginExtension> {
+            toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
+        }
+        project.extensions.configure<KotlinJvmProjectExtension> {
+            compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
+        }
+
+        // Spring Boot 无版本坐标（starter 系列）依赖 BOM 提供版本。
+        // 注意：imports 的 lambda 是接收者类型 ImportsHandler.() -> Unit，
+        // 写 it.mavenBom(...) 会报 Unresolved reference: it。
+        project.extensions.configure<DependencyManagementExtension> {
+            imports { mavenBom("org.springframework.boot:spring-boot-dependencies:3.3.5") }
+        }
+
+        val libs = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
+        project.dependencies.add("testImplementation", libs.findLibrary("spring-boot-starter-test").get())
+        project.dependencies.add("testImplementation", libs.findLibrary("mockk").get())
+
+        project.tasks.withType(Test::class.java).configureEach { useJUnitPlatform() }
     }
 }
 ```
 
-`buildSrc/src/main/kotlin/compliance-kotlin-module.gradle.kts`:
-```kotlin
-import org.gradle.api.artifacts.VersionCatalogsExtension
-import org.gradle.kotlin.dsl.the
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
-// 注意：预编译脚本插件的 plugins 块无法访问 version catalog（Gradle 官方限制），
-// 因此插件版本在此显式给出；依赖通过 VersionCatalogsExtension 显式取 catalog。
-plugins {
-    id("java-library")  // 提供 api() 配置（module-common 用 api 向下游暴露共享技术栈）
-    kotlin("jvm") version "2.0.21"
-    kotlin("plugin.spring") version "2.0.21"
-    kotlin("plugin.jpa") version "2.0.21"
-    id("io.spring.dependency-management") version "1.1.6"
-}
-
-val libs = the<VersionCatalogsExtension>().named("libs")
-
-java {
-    toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
-}
-
-kotlin {
-    compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
-}
-
-dependencies {
-    testImplementation(libs.spring.boot.starter.test)
-    testImplementation(libs.mockk)
-}
-
-tasks.withType<Test> { useJUnitPlatform() }
+`buildSrc/src/main/resources/META-INF/gradle-plugins/compliance-kotlin-module.properties`:
+```properties
+implementation-class=com.example.compliance.ComplianceKotlinModulePlugin
 ```
 
-- [ ] **Step 2: 写各模块 build 文件**
+- [ ] **Step 2: 修改根工程 build 文件（仓库 + 插件声明）**
+
+在根 `settings.gradle.kts` 末尾追加仓库声明（Task 0.1 未声明仓库，`gradle build` 解析依赖会报 "no repositories are defined"）:
+```kotlin
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        mavenCentral()
+    }
+}
+```
+
+根 `build.gradle.kts` 整体替换为（只保留 spring-boot）:
+```kotlin
+plugins {
+    // kotlin.jvm/spring/jpa 与 io.spring.dependency-management 由约定插件 (buildSrc) 无版本应用——
+    // buildSrc 的 implementation 依赖让这些插件以未知版本出现在整个构建 classpath 上，
+    // 此处再带版本请求会报 "already on the classpath with an unknown version"。
+    // 仅 spring-boot 插件（不在 buildSrc classpath 上）在此 apply false 声明版本。
+    alias(libs.plugins.spring.boot) apply false
+}
+```
+
+- [ ] **Step 3: 写各模块 build 文件**
 
 `module-common/build.gradle.kts`（用 `api` 向所有下游暴露共享技术栈）:
 ```kotlin
@@ -383,15 +452,17 @@ package com.example.compliance.openapi
 // 骨架占位：对外 API 后续里程碑实现（spec 1.3 明确首发仅骨架）
 ```
 
-- [ ] **Step 3: 验证**
+- [ ] **Step 4: 验证**
 
-Run: `gradle build -x test`
-Expected: BUILD SUCCESSFUL（15 个模块全部编译通过）。
+Run: `./gradlew build -x test -x bootJar`
+（必须用 8.8 wrapper；系统 gradle 8.2.1 内嵌 Kotlin 1.9.10 不支持 JVM target 21，buildSrc 会报 `Unknown Kotlin JVM target: 21`）
+Expected: BUILD SUCCESSFUL（15 个模块全部编译通过，约定插件加载并应用成功）。
+> `-x bootJar`：app-server 主类到 Task 0.5 才创建，bootJar 无法解析 mainClass 属预期。
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add buildSrc/ module-*/build.gradle.kts app-server/build.gradle.kts
+git add buildSrc/ module-*/build.gradle.kts app-server/build.gradle.kts settings.gradle.kts build.gradle.kts
 git commit -m "chore: scaffold 15 modules with convention plugin"
 ```
 
