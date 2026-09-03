@@ -110,4 +110,14 @@ class FindingLifecycleServiceTest {
         assertEquals(7L, evidence.findingId)
         assertEquals("FIX_COMMIT", evidence.evidenceType)
     }
+
+    @Test
+    fun `findingsGlobal filters by project status and severity`() {
+        val f1 = Finding().apply { id = 1L; projectId = 9L; severity = "HIGH"; status = FindingStatus.NEW; engine = "SEMGREP"; ruleCode = "R1"; filePath = "A.java"; fingerprint = "g1" }
+        val f2 = Finding().apply { id = 2L; projectId = 9L; severity = "LOW"; status = FindingStatus.NEW; engine = "SEMGREP"; ruleCode = "R1"; filePath = "A.java"; fingerprint = "g2" }
+        val f3 = Finding().apply { id = 3L; projectId = 8L; severity = "HIGH"; status = FindingStatus.NEW; engine = "SEMGREP"; ruleCode = "R1"; filePath = "A.java"; fingerprint = "g3" }
+        every { findingRepository.findAll() } returns listOf(f1, f2, f3)
+        val result = service.findingsGlobal(projectId = 9L, status = FindingStatus.NEW, severity = "HIGH")
+        assertEquals(listOf(1L), result.map { it.id })
+    }
 }

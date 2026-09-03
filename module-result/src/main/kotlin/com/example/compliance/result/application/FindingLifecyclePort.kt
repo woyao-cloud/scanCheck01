@@ -38,4 +38,7 @@ interface FindingLifecyclePort {
     fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>
     fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>, targetFindingIds: Set<Long>): VerifyResult
     fun findById(findingId: Long): FindingView?
+
+    /** M10 I1：全局 finding 过滤查询（R-10.5-a：未分页，分页/计数由 admin 聚合）。 */
+    fun findingsGlobal(projectId: Long?, status: FindingStatus?, severity: String?): List<FindingView>
 }

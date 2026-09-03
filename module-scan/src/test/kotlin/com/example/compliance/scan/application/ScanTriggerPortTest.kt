@@ -46,4 +46,17 @@ class ScanTriggerPortTest {
         assertEquals(ScanTaskStatus.PENDING, view.status)
         verify { scanTaskRepository.save(match { it.requestId == "recheck-f7" && it.triggerType == "MANUAL" }) }
     }
+
+    @Test
+    fun `list filters by project engine and status and maps to view`() {
+        val tasks = listOf(
+            ScanTask().apply { id = 1L; projectId = 9L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCESS },
+            ScanTask().apply { id = 2L; projectId = 9L; engine = "SEMGREP"; status = ScanTaskStatus.FAILED },
+            ScanTask().apply { id = 3L; projectId = 8L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCESS },
+        )
+        every { scanTaskRepository.findAll() } returns tasks
+        val result = service.list(projectId = 9L, engine = "SEMGREP", status = ScanTaskStatus.SUCCESS)
+        assertEquals(listOf(1L), result.map { it.id })
+        verify(exactly = 1) { scanTaskRepository.findAll() }
+    }
 }

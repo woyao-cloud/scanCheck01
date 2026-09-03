@@ -23,7 +23,7 @@ class ScanTaskService(
     private val evaluationRepository: ComplianceEvaluationRepository,
     private val itemResultRepository: ChecklistItemResultRepository,
     private val orchestrator: ScanOrchestrator,
-) : ScanTriggerPort {
+) : ScanTriggerPort, ScanTaskQueryPort {
     /** 创建 PENDING 扫描任务并异步启动，立即返回任务。
      *  Ruling #45: 刻意不加 @Transactional —— save 自带事务立即提交，异步线程的
      *  findById 才能看到 PENDING 行；若在未提交事务内 dispatch，@Async 线程可能
@@ -78,4 +78,15 @@ class ScanTaskService(
         val task = startScan(projectId, engine, ref, triggerType, requestId)
         return ScanTaskView(task.id!!, task.projectId, task.engine, task.status, task.requestId ?: "")
     }
+
+    /** M10 I1：admin 任务列表 —— findAll + 过滤 + id 倒序（MVP 内存级，R-10.5-a）。 */
+    override fun list(projectId: Long?, engine: String?, status: ScanTaskStatus?): List<ScanTaskView> =
+        scanTaskRepository.findAll()
+            .asSequence()
+            .filter { projectId == null || it.projectId == projectId }
+            .filter { engine == null || it.engine == engine }
+            .filter { status == null || it.status == status }
+            .sortedByDescending { it.id }
+            .map { ScanTaskView(it.id!!, it.projectId, it.engine, it.status, it.requestId ?: "") }
+            .toList()
 }

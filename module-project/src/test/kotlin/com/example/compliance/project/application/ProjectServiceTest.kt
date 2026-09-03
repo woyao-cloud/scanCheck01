@@ -51,4 +51,11 @@ class ProjectServiceTest {
         )
         assertEquals("cipher-text", repo.credentialRef)
     }
+
+    @Test
+    fun `count delegates to repository count`() {
+        every { projectRepository.count() } returns 3L
+        assertEquals(3L, service.count())
+        verify(exactly = 1) { projectRepository.count() }
+    }
 }

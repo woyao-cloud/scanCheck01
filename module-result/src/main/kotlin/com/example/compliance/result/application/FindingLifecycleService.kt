@@ -84,6 +84,15 @@ class FindingLifecycleService(
     override fun findById(findingId: Long): FindingView? =
         findingRepository.findById(findingId).map { it.toView() }.orElse(null)
 
+    override fun findingsGlobal(projectId: Long?, status: FindingStatus?, severity: String?): List<FindingView> =
+        findingRepository.findAll()
+            .asSequence()
+            .filter { projectId == null || it.projectId == projectId }
+            .filter { status == null || it.status == status }
+            .filter { severity == null || it.severity.equals(severity, ignoreCase = true) }
+            .map { it.toView() }
+            .toList()
+
     private fun com.example.compliance.result.domain.Finding.toView() = FindingView(
         id!!, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber,
         firstSeenAt, lastSeenAt, occurrenceCount, engine,

@@ -14,7 +14,7 @@ class ProjectService(
     private val projectRepository: ProjectRepository,
     private val repoRepository: RepoRepository,
     private val credentialCrypto: CredentialCrypto,
-) {
+) : ProjectQueryPort {
     @Transactional
     fun create(command: CreateProjectCommand): Project {
         if (projectRepository.existsByCode(command.code)) {
@@ -51,4 +51,6 @@ class ProjectService(
     }
 
     fun listRepositories(projectId: Long): List<Repository> = repoRepository.findByProjectId(projectId)
+
+    override fun count(): Long = projectRepository.count()
 }
