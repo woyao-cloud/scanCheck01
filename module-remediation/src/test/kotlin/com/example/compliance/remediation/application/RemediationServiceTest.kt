@@ -19,12 +19,14 @@ class RemediationServiceTest {
 
     private val taskRepository = mockk<RemediationTaskRepository>()
     private val lifecyclePort = mockk<FindingLifecyclePort>()
-    private val service = RemediationService(taskRepository, lifecyclePort)
+    private val triggerPort = mockk<com.example.compliance.scan.application.ScanTriggerPort>()
+    private val service = RemediationService(taskRepository, lifecyclePort, triggerPort)
 
     private fun view(status: FindingStatus) = FindingView(
         id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
         status = status, filePath = "A.java", lineNumber = 1,
         firstSeenAt = Instant.now(), lastSeenAt = Instant.now(), occurrenceCount = 1,
+        engine = "STUB",
     )
 
     @Test
@@ -123,5 +125,31 @@ class RemediationServiceTest {
             service.status(7L, FindingStatus.CONFIRMED, "x", "DOC", "r", 9L)
         }
         assertEquals("target status not terminal: CONFIRMED", ex.message)
+    }
+
+    @Test
+    fun `requestRecheck transitions fixed to rechecking and creates rescan`() {
+        every { lifecyclePort.findById(7L) } returnsMany listOf(
+            view(FindingStatus.FIXED),        // requestRecheck 守卫读
+            view(FindingStatus.RECHECKING),   // mirrorTransition 内 get 重读
+        )
+        every { taskRepository.findByFindingId(7L) } returns null
+        every { lifecyclePort.transition(7L, FindingStatus.RECHECKING, "recheck_requested:scan_55", 9L) } returns FindingStatus.RECHECKING
+        every { triggerPort.triggerScan(9L, "STUB", null, "MANUAL", "recheck-f7") } returns
+            com.example.compliance.scan.application.ScanTaskView(55L, 9L, "STUB", com.example.compliance.scan.domain.ScanTaskStatus.PENDING, "recheck-f7")
+
+        val result = service.requestRecheck(7L, 9L)
+
+        assertEquals(FindingStatus.RECHECKING, result.finding.status)
+        verify { triggerPort.triggerScan(9L, "STUB", null, "MANUAL", "recheck-f7") }
+    }
+
+    @Test
+    fun `requestRecheck requires fixed`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.NEW)
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.requestRecheck(7L, 9L)
+        }
+        assertEquals("finding not in FIXED state: 7", ex.message)
     }
 }

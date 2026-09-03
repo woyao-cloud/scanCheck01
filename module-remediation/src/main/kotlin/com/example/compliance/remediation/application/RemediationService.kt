@@ -6,6 +6,7 @@ import com.example.compliance.remediation.infrastructure.RemediationTaskReposito
 import com.example.compliance.result.application.FindingLifecyclePort
 import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.domain.FindingStatus
+import com.example.compliance.scan.application.ScanTriggerPort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDate
@@ -15,6 +16,7 @@ import java.time.LocalDate
 class RemediationService(
     private val taskRepository: RemediationTaskRepository,
     private val lifecyclePort: FindingLifecyclePort,
+    private val triggerPort: ScanTriggerPort,
 ) {
     /** 派单：创建整改任务并把 finding 置为 ASSIGNED（task.status 镜像写入）。 */
     @Transactional
@@ -130,6 +132,21 @@ class RemediationService(
         mustGetFinding(findingId)
         lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
         return mirrorTransition(findingId, to, reason, actorId)
+    }
+
+    /** 请求复扫验证：FIXED → RECHECKING，并创建复扫 ScanTask（trigger_type=MANUAL）。
+     *  spec §4.3：reason 记入 finding_status；复扫完成后由编排器 verifyRechecking 闭环。 */
+    @Transactional
+    fun requestRecheck(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.FIXED) {
+            throw BusinessException(409, "finding not in FIXED state: $findingId")
+        }
+        val scan = triggerPort.triggerScan(
+            projectId = finding.projectId, engine = finding.engine, ref = null,
+            triggerType = "MANUAL", requestId = "recheck-f$findingId",
+        )
+        return mirrorTransition(findingId, FindingStatus.RECHECKING, "recheck_requested:scan_${scan.id}", actorId)
     }
 
     companion object {

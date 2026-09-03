@@ -83,4 +83,13 @@ class RemediationControllerTest {
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.finding.status").value("WAIVED"))
     }
+
+    @Test
+    fun `recheck returns rechecking finding`() {
+        every { service.requestRecheck(7L, 1L) } returns
+            view.copy(finding = view.finding.copy(status = FindingStatus.RECHECKING))
+        mockMvc.perform(post("/api/v1/remediation/findings/7/recheck"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.finding.status").value("RECHECKING"))
+    }
 }

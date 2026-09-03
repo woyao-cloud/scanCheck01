@@ -44,6 +44,10 @@ class RemediationController(private val service: RemediationService) {
     fun evidence(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
         service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
 
+    @PostMapping("/findings/{id}/recheck")
+    fun recheck(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
+        service.requestRecheck(id, actorId(auth))
+
     data class StatusCommand(
         val status: FindingStatus,
         val reason: String,
