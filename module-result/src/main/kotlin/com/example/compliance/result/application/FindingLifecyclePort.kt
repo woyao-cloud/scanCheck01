@@ -36,6 +36,6 @@ interface FindingLifecyclePort {
     fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): EvidenceView
     fun findingsForScanTask(scanTaskId: Long): List<FindingView>
     fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>
-    fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult
+    fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>, targetFindingIds: Set<Long>): VerifyResult
     fun findById(findingId: Long): FindingView?
 }

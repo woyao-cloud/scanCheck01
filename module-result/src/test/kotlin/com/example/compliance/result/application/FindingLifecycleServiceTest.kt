@@ -53,14 +53,45 @@ class FindingLifecycleServiceTest {
         // statusRepository is a strict mock: transition() calls save() before the trailing verify, so it must be stubbed.
         every { statusRepository.save(any()) } answers { firstArg() }
 
-        // 复扫命中 f1（present），f2/f3 缺席
-        val result = service.verifyRechecking(5L, 99L, setOf(1L))
+        // 复扫命中 f1（present），f2/f3 缺席；目标集 = 全部三个 finding（保持原语义）
+        val result = service.verifyRechecking(5L, 99L, setOf(1L), targetFindingIds = setOf(1L, 2L, 3L))
 
         assertEquals(VerifyResult(closed = 2, regressed = 1), result)
         assertEquals(FindingStatus.CONFIRMED, fixed1.status)
         assertEquals(FindingStatus.CLOSED, fixed2.status)
         assertEquals(FindingStatus.CLOSED, fixed3.status)
         verify { statusRepository.save(any<FindingStatusSnapshot>()) }
+    }
+
+    @Test
+    fun `verifyRechecking only touches target finding ids`() {
+        val f1 = Finding().apply { id = 1L; projectId = 9L; status = FindingStatus.RECHECKING; fingerprint = "t1" }
+        val f2 = Finding().apply { id = 2L; projectId = 9L; status = FindingStatus.RECHECKING; fingerprint = "t2" }
+        every { findingRepository.findAll() } returns listOf(f1, f2)
+        every { findingRepository.save(any()) } answers { firstArg() }
+        every { findingRepository.findById(any()) } answers { firstArg<Long>().let { id ->
+            java.util.Optional.of(listOf(f1, f2).first { it.id == id })
+        } }
+        every { statusRepository.save(any()) } answers { firstArg() }
+
+        // target 集只含 id=1 → 只有 id=1 被转移（缺席→CLOSED）；id=2 不被碰
+        val result = service.verifyRechecking(9L, 99L, presentFindingIds = emptySet(), targetFindingIds = setOf(1L))
+
+        assertEquals(VerifyResult(closed = 1, regressed = 0), result)
+        assertEquals(FindingStatus.CLOSED, f1.status)
+        assertEquals(FindingStatus.RECHECKING, f2.status)   // 目标集外保持 RECHECKING
+        verify(exactly = 1) { findingRepository.findById(1L) }
+        verify(exactly = 0) { findingRepository.findById(2L) }
+    }
+
+    @Test
+    fun `verifyRechecking with empty target ids is a no-op`() {
+        val f1 = Finding().apply { id = 1L; projectId = 9L; status = FindingStatus.RECHECKING; fingerprint = "t1" }
+        every { findingRepository.findAll() } returns listOf(f1)
+        // 空 target → 无 transition → 不触碰任何 finding（不产生 save/findById）
+        val result = service.verifyRechecking(9L, 99L, presentFindingIds = emptySet(), targetFindingIds = emptySet())
+        assertEquals(VerifyResult(0, 0), result)
+        verify(exactly = 0) { findingRepository.findById(any()) }
     }
 
     @Test

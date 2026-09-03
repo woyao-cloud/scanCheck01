@@ -53,12 +53,15 @@ class FindingLifecycleService(
         return EvidenceView(saved.id!!, saved.findingId, saved.evidenceType, saved.evidenceRef, saved.addedBy, saved.addedAt)
     }
 
-    /** 复扫验证：扫描完成后调用。处于 RECHECKING 的 finding —— 本次扫描缺席 → CLOSED；命中 → 回归 CONFIRMED。 */
+    /** 复扫验证：扫描完成后调用。R-10.2-a（M10 I8）：只验证 requestId 解析出的目标 finding
+     *  （recheck-f<id>），不再遍历项目全部 RECHECKING —— 并发多复扫不再误 CLOSED / 乐观锁冲突。
+     *  单复扫行为与 spec §4.3 一致；targetFindingIds 空 → 不验证（非复扫扫描 no-op）。 */
     @Transactional
-    override fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult {
+    override fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>, targetFindingIds: Set<Long>): VerifyResult {
         var closed = 0
         var regressed = 0
-        findingRepository.findAll().filter { it.projectId == projectId && it.status == FindingStatus.RECHECKING }
+        findingRepository.findAll()
+            .filter { it.projectId == projectId && it.status == FindingStatus.RECHECKING && it.id in targetFindingIds }
             .forEach { finding ->
                 if (finding.id in presentFindingIds) {
                     transition(finding.id!!, FindingStatus.CONFIRMED, "regression_in_scan_$scanTaskId", null)

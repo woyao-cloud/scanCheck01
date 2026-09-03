@@ -117,7 +117,11 @@ class ScanOrchestrator(
             val findings = findingRepository.findByProjectScanTask(scanTaskId)
             // 复扫验证（M7 闭环）：RECHECKING finding 缺席→CLOSED，命中→回归 CONFIRMED
             val presentIds = findings.mapNotNull { it.id }.toSet()
-            val verify = lifecycleService.verifyRechecking(task.projectId, scanTaskId, presentIds)
+            // M10 I8：从复扫任务 requestId 解析目标 finding（recheck-f<id>）；非复扫任务空集 → 不验证。
+            // task 为 ScanTask 实体（requestId 可空），用 ?. 安全调用 —— 与下方 catch 补偿同一模式。
+            val targetIds = task.requestId?.takeIf { it.startsWith("recheck-f") }
+                ?.removePrefix("recheck-f")?.toLongOrNull()?.let { setOf(it) } ?: emptySet()
+            val verify = lifecycleService.verifyRechecking(task.projectId, scanTaskId, presentIds, targetIds)
             log(scanTaskId, "VERIFY", "INFO", "rechecking closed=${verify.closed} regressed=${verify.regressed}")
 
             task.ruleIds = objectMapper.writeValueAsString(ruleIds)
