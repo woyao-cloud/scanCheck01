@@ -43,10 +43,11 @@ class TrivyResultParserTest {
 
     @Test
     fun `per-vendor V3 preferred over own V2 then max across vendors`() {
-        // redhat V3=7.8 优先于同 vendor 更高的 V2=9.9，且跨 vendor 取 max（> github V3=5.0）→ 7.8
-        val stdout = """{"Results":[{"Target":"package-lock.json","Class":"lang-pkgs","Type":"java","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-TESTA","PkgName":"pkg-a","InstalledVersion":"1.0.0","FixedVersion":"1.0.1","Severity":"HIGH","CVSS":{"redhat":{"V3Score":7.8,"V2Score":9.9},"github":{"V3Score":5.0}}}]}]}"""
+        // github V3=8.0 > redhat V3=7.8 > 0：正确实现 → 跨 vendor max=8.0；
+        // 若实现错取同 vendor V2 → 9.9；若错取第一个 vendor → 7.8 —— 三种行为均被区分
+        val stdout = """{"Results":[{"Target":"package-lock.json","Class":"lang-pkgs","Type":"java","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-TESTA","PkgName":"pkg-a","InstalledVersion":"1.0.0","FixedVersion":"1.0.1","Severity":"HIGH","CVSS":{"redhat":{"V3Score":7.8,"V2Score":9.9},"github":{"V3Score":8.0}}}]}]}"""
         val finding = parser.parse(stdout).single()
-        assertEquals(7.8, finding.cvssScore)
+        assertEquals(8.0, finding.cvssScore)
     }
 
     @Test
