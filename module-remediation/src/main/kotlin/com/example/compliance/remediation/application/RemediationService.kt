@@ -135,8 +135,10 @@ class RemediationService(
     }
 
     /** 请求复扫验证：FIXED → RECHECKING，并创建复扫 ScanTask（trigger_type=MANUAL）。
-     *  spec §4.3：reason 记入 finding_status；复扫完成后由编排器 verifyRechecking 闭环。 */
-    @Transactional
+     *  spec §4.3：reason 记入 finding_status；复扫完成后由编排器 verifyRechecking 闭环。
+     *  Ruling #45：刻意不加 @Transactional —— triggerScan 创建的复扫 PENDING 行必须自提交后才
+     *  派发 executeAsync；若加入外层事务，@Async 线程可能先于提交 findById → 复扫任务永久卡死
+     *  PENDING。transition 与 taskRepository.save 各自自带事务自提交，状态语义不受影响。 */
     fun requestRecheck(findingId: Long, actorId: Long): FindingRemediationView {
         val finding = mustGetFinding(findingId)
         if (finding.status != FindingStatus.FIXED) {
