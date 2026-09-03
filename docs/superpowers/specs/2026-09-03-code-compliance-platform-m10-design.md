@@ -70,8 +70,8 @@ interface NotificationSender {
 ```
 
 - **`Channel`**（module-notification/domain）：`enum class Channel { IN_APP, EMAIL, WECHAT, DINGTALK }`。MVP 实际发送端仅 `IN_APP`（落库 = 站内信表预留）；`EMAIL/WECHAT/DINGTALK` 为契约预留，发送时仅日志（渠道仍延后，spec §6.4）。
-- **`NotificationService`** 升级为 `NotificationSender` 的唯一实现（`@Service`，落库）：`send(channel, subject, body, recipients)` 对**每个 recipient 落一条** `Notification` 行（`channel = channel.name`，`type = "EVENT"`，`title = subject`，`content = body`，沿用 9.7 桩语义 `PENDING → SENT` + `sentAt`）。保留 `list(recipient)` 查询。**移除旧签名** `send(String, String, String, String, String)`（无调用方，9.7 Minor ② 已记）并同步更新 `NotificationServiceTest`。
-- **`LogNotificationSender`**（spec §6.4 点名）：`@Service` 占位适配器，**`@Primary`**，实现 `NotificationSender`：`log.info` 记录 channel/subject/recipients（「写日志」占位）+ 委托 `NotificationService` 落库（「站内信表预留」）。事件消费方与外部注入点统一拿 `NotificationSender` bean，实际拿到 `LogNotificationSender`。
+- **`NotificationService`** 提供 `NotificationSender` 的落库实现（`@Service`）：`send(channel, subject, body, recipients)` 对**每个 recipient 落一条** `Notification` 行（`channel = channel.name`，`type = "EVENT"`，`title = subject`，`content = body`，沿用 9.7 桩语义 `PENDING → SENT` + `sentAt`）。保留 `list(recipient)` 查询。**移除旧签名** `send(String, String, String, String, String)`（无调用方，9.7 Minor ② 已记）并同步更新 `NotificationServiceTest`。
+- **`LogNotificationSender`**（spec §6.4 点名）：`@Service` 占位适配器，**`@Primary`**，实现 `NotificationSender`：`log.info` 记录 channel/subject/recipients（「写日志」占位）+ **委托 `NotificationService` 落库**（「站内信表预留」）。事件消费方与外部注入点统一按 `NotificationSender` 注入，实际拿到 `@Primary` 的 `LogNotificationSender`。
 - `NotificationServiceTest`（9.7 已有）适配新签名：verify 两次 save（PENDING→SENT）逐 recipient。
 
 ### 3.2 事件模型（用户已确认：Spring ApplicationEvent）
