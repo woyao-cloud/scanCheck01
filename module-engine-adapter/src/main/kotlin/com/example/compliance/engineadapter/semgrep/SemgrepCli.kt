@@ -32,6 +32,12 @@ class ProcessSemgrepCli(
                 }
                 throw IllegalStateException("semgrep timed out after ${timeoutSeconds}s")
             }
+            // F1 (final review C1): semgrep 退出语义 —— 0=clean、1=命中 finding、>=2=错误。
+            // 配置/规则错误仍可能输出合法 JSON {"errors":[...],"results":[]}，若不拦截会被解析成
+            // 0 finding 的「干净扫描」，复扫路径误 CLOSED。exit>=2 必须抛异常（主检；parser 再兜底）。
+            if (process.exitValue() >= 2) {
+                throw IllegalStateException("semgrep exited with code ${process.exitValue()}")
+            }
             return tmp.readText()
         } finally {
             tmp.delete()
