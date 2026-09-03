@@ -90,7 +90,7 @@ class RemediationServiceTest {
             com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
         every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
 
-        val result = service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
+        val result = service.markFixed(7L, 9L, false, "FIX_COMMIT", "deadbeef")
 
         assertEquals(FindingStatus.FIXED, result.finding.status)
         verify { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) }
@@ -104,7 +104,7 @@ class RemediationServiceTest {
             id = 11L; findingId = 7L; assigneeUserId = 3L; createdAt = Instant.now()
         }
         val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
-            service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
+            service.markFixed(7L, 9L, false, "FIX_COMMIT", "deadbeef")
         }
         assertEquals(403, ex.code)
         assertEquals("only the assignee can mark fixed", ex.message)
@@ -125,7 +125,7 @@ class RemediationServiceTest {
             com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
         every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
 
-        val result = service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
+        val result = service.markFixed(7L, 9L, false, "FIX_COMMIT", "deadbeef")
         assertEquals(FindingStatus.FIXED, result.finding.status)
     }
 
@@ -144,7 +144,7 @@ class RemediationServiceTest {
             com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
         every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
 
-        val result = service.markFixed(7L, 9L, setOf("ROLE_ADMIN"), "FIX_COMMIT", "deadbeef")
+        val result = service.markFixed(7L, 9L, true, "FIX_COMMIT", "deadbeef")
         assertEquals(FindingStatus.FIXED, result.finding.status)
     }
 
@@ -152,7 +152,7 @@ class RemediationServiceTest {
     fun `fixed without evidence is rejected`() {
         every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXING)
         val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
-            service.markFixed(7L, 9L, emptySet(), "", "")
+            service.markFixed(7L, 9L, false, "", "")
         }
         assertEquals("evidence required for fixed", ex.message)
     }

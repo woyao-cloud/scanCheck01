@@ -100,7 +100,7 @@ class M9RecheckFailureCompensationTest : AbstractIntegrationTest() {
         remediationService.confirm(findingId, 1L)
         remediationService.assign(findingId, 1L, 3L, "fix plan", null)
         remediationService.startFix(findingId, 1L)
-        remediationService.markFixed(findingId, 1L, setOf("ROLE_ADMIN"), "FIX_COMMIT", "abc123")
+        remediationService.markFixed(findingId, 1L, true, "FIX_COMMIT", "abc123")
         assertEquals(FindingStatus.FIXED, lifecyclePort.findById(findingId)!!.status)
     }
 

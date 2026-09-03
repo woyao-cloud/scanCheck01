@@ -47,7 +47,7 @@ class RemediationController(private val service: RemediationService) {
     // F3/F4 (spec §6.1): 任意已登录用户可调；服务端校验受让人（见 markFixed）
     @PreAuthorize("isAuthenticated()")
     fun fixed(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
-        service.markFixed(id, actorId(auth), actorAuthorities(auth), cmd.evidenceType, cmd.evidenceRef)
+        service.markFixed(id, actorId(auth), isAdmin(auth), cmd.evidenceType, cmd.evidenceRef)
 
     @PostMapping("/findings/{id}/evidence")
     @PreAuthorize("isAuthenticated()")
@@ -76,7 +76,7 @@ class RemediationController(private val service: RemediationService) {
     private fun actorId(auth: Authentication?): Long =
         (auth?.principal as? AuthPrincipal)?.userId ?: 1L
 
-    /** 调用方 authorities（F4）：markFixed 的 ADMIN 覆受让人校验用；无 AuthPrincipal 时回落空集。 */
-    private fun actorAuthorities(auth: Authentication?): Set<String> =
-        (auth?.principal as? AuthPrincipal)?.authorities ?: emptySet()
+    /** M10 清理②：hasRole 接线 —— ADMIN 覆写判定经 AuthPrincipal.hasRole（原 actorAuthorities 直查 authorities 死代码化）。 */
+    private fun isAdmin(auth: Authentication?): Boolean =
+        (auth?.principal as? AuthPrincipal)?.hasRole("ADMIN") ?: false
 }
