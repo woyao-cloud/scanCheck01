@@ -98,4 +98,30 @@ class RemediationServiceTest {
         }
         assertEquals("evidence required for fixed", ex.message)
     }
+
+    @Test
+    fun `terminal status requires reason and evidence and is reached from any state`() {
+        every { lifecyclePort.findById(7L) } returnsMany listOf(
+            view(FindingStatus.NEW),      // status 守卫读
+            view(FindingStatus.WAIVED),   // mirrorTransition 内 get 重读
+        )
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply { id = 11L; findingId = 7L; createdAt = Instant.now() }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "DOC", "http://x/waiver", 9L) } returns
+            com.example.compliance.result.application.EvidenceView(2L, 7L, "DOC", "http://x/waiver", 9L, java.time.Instant.EPOCH)
+        every { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) } returns FindingStatus.WAIVED
+
+        val result = service.status(7L, FindingStatus.WAIVED, "risk accepted", "DOC", "http://x/waiver", 9L)
+
+        assertEquals(FindingStatus.WAIVED, result.finding.status)
+        verify { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) }
+    }
+
+    @Test
+    fun `non-terminal target is rejected`() {
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.status(7L, FindingStatus.CONFIRMED, "x", "DOC", "r", 9L)
+        }
+        assertEquals("target status not terminal: CONFIRMED", ex.message)
+    }
 }

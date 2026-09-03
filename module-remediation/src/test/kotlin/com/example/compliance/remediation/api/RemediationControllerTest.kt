@@ -17,6 +17,7 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
@@ -68,5 +69,18 @@ class RemediationControllerTest {
         mockMvc.perform(get("/api/v1/remediation/findings").param("projectId", "9"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$[0].finding.id").value(7))
+    }
+
+    @Test
+    fun `put status returns terminal finding`() {
+        every { service.status(7L, FindingStatus.WAIVED, "risk accepted", "DOC", "http://x", 1L) } returns
+            view.copy(finding = view.finding.copy(status = FindingStatus.WAIVED))
+        mockMvc.perform(
+            put("/api/v1/remediation/findings/7/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"status":"WAIVED","reason":"risk accepted","evidenceType":"DOC","evidenceRef":"http://x"}""")
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.finding.status").value("WAIVED"))
     }
 }

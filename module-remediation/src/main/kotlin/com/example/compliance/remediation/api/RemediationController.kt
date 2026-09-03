@@ -44,6 +44,17 @@ class RemediationController(private val service: RemediationService) {
     fun evidence(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
         service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
 
+    data class StatusCommand(
+        val status: FindingStatus,
+        val reason: String,
+        val evidenceType: String?,
+        val evidenceRef: String?,
+    )
+
+    @PutMapping("/findings/{id}/status")
+    fun status(@PathVariable id: Long, @RequestBody cmd: StatusCommand, auth: Authentication?): FindingRemediationView =
+        service.status(id, cmd.status, cmd.reason, cmd.evidenceType ?: "", cmd.evidenceRef ?: "", actorId(auth))
+
     private fun actorId(@Suppress("UNUSED_PARAMETER") auth: Authentication?): Long {
         // module-common 目前无 AuthPrincipal 类型，占位返回 1L（系统操作者）；
         // M9 RBAC 接入时在此解析 principal 的真实用户身份。

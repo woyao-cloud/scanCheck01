@@ -116,6 +116,30 @@ class RemediationService(
         return if (from >= views.size) emptyList() else views.subList(from, minOf(from + size, views.size))
     }
 
+    /** 终态转移：IGNORED/FALSE_POSITIVE/ACCEPTED_RISK/WAIVED（必附 reason + evidence）。 */
+    @Transactional
+    fun status(
+        findingId: Long, to: FindingStatus, reason: String, evidenceType: String, evidenceRef: String, actorId: Long,
+    ): FindingRemediationView {
+        if (to !in TERMINAL_STATES) {
+            throw BusinessException(400, "target status not terminal: $to")
+        }
+        if (reason.isBlank() || evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "reason and evidence required for terminal status")
+        }
+        mustGetFinding(findingId)
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return mirrorTransition(findingId, to, reason, actorId)
+    }
+
+    companion object {
+        /** 终态集（spec §4.2）：到达后仅复现/复审系统动作可离开。 */
+        val TERMINAL_STATES = setOf(
+            FindingStatus.IGNORED, FindingStatus.FALSE_POSITIVE,
+            FindingStatus.ACCEPTED_RISK, FindingStatus.WAIVED,
+        )
+    }
+
     /** 状态转移 + task.status 镜像（P2-D4）。 */
     private fun mirrorTransition(findingId: Long, to: FindingStatus, reason: String, actorId: Long): FindingRemediationView {
         val status = lifecyclePort.transition(findingId, to, reason, actorId)
