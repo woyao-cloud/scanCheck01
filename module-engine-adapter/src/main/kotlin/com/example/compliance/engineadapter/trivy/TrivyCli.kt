@@ -30,14 +30,17 @@ class ProcessTrivyCli(
             if (!completed) {
                 process.destroy()
                 if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
-                throw IllegalStateException("trivy timed out after ${timeoutSeconds}s")
+                throw IllegalStateException("trivy timed out after ${timeoutSeconds}s; stderr: ${tailOf(err)}; stdout: ${tailOf(out)}")
             }
             if (process.exitValue() != 0) {
-                throw IllegalStateException("trivy exited with code ${process.exitValue()}")
+                throw IllegalStateException("trivy exited with code ${process.exitValue()}; stderr: ${tailOf(err)}; stdout: ${tailOf(out)}")
             }
             return out.readText()
         } finally {
             out.delete(); err.delete()
         }
     }
+
+    private fun tailOf(file: File): String =
+        if (file.exists()) file.readText().takeLast(500) else ""
 }

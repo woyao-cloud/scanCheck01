@@ -40,4 +40,20 @@ class TrivyResultParserTest {
         assertTrue(parser.parse("""{"Results":[]}""").isEmpty())
         assertTrue(parser.parse("not json").isEmpty())
     }
+
+    @Test
+    fun `per-vendor V3 preferred over own V2 then max across vendors`() {
+        // redhat V3=7.8 优先于同 vendor 更高的 V2=9.9，且跨 vendor 取 max（> github V3=5.0）→ 7.8
+        val stdout = """{"Results":[{"Target":"package-lock.json","Class":"lang-pkgs","Type":"java","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-TESTA","PkgName":"pkg-a","InstalledVersion":"1.0.0","FixedVersion":"1.0.1","Severity":"HIGH","CVSS":{"redhat":{"V3Score":7.8,"V2Score":9.9},"github":{"V3Score":5.0}}}]}]}"""
+        val finding = parser.parse(stdout).single()
+        assertEquals(7.8, finding.cvssScore)
+    }
+
+    @Test
+    fun `nvd without V3 or V2 falls through to vendor loop`() {
+        // nvd 存在但无 V3/V2 → 落入 vendor 循环，取 redhat V3=6.1
+        val stdout = """{"Results":[{"Target":"package-lock.json","Class":"lang-pkgs","Type":"java","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-TESTB","PkgName":"pkg-b","InstalledVersion":"1.0.0","FixedVersion":"1.0.1","Severity":"HIGH","CVSS":{"nvd":{},"redhat":{"V3Score":6.1}}}]}]}"""
+        val finding = parser.parse(stdout).single()
+        assertEquals(6.1, finding.cvssScore)
+    }
 }

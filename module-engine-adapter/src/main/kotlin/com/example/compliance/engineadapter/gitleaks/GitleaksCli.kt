@@ -35,15 +35,18 @@ class ProcessGitleaksCli(
             if (!completed) {
                 process.destroy()
                 if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
-                throw IllegalStateException("gitleaks timed out after ${timeoutSeconds}s")
+                throw IllegalStateException("gitleaks timed out after ${timeoutSeconds}s; stderr: ${tailOf(err)}")
             }
             val code = process.exitValue()
             if (code != 0 && code != 1) {
-                throw IllegalStateException("gitleaks exited with code $code")
+                throw IllegalStateException("gitleaks exited with code $code; stderr: ${tailOf(err)}")
             }
             return if (report.exists()) report.readText() else "[]"
         } finally {
             report.delete(); out.delete(); err.delete()
         }
     }
+
+    private fun tailOf(file: File): String =
+        if (file.exists()) file.readText().takeLast(500) else ""
 }
