@@ -31,6 +31,8 @@ app:
     timeout-seconds: 300
   credential:
     secret: "0123456789abcdef0123456789abcdef"   # 生产环境改由环境变量注入
+  scan:
+    checkout-engines: SEMGREP   # 仅这些引擎在编排器侧触发 GitCheckout；STUB 等跳过（Task 8.4 消费）
 
 springdoc:
   swagger-ui:
