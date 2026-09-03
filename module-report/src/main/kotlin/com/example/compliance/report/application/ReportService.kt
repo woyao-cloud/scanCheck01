@@ -1,6 +1,7 @@
 package com.example.compliance.report.application
 
 import com.example.compliance.common.exception.BusinessException
+import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.scan.infrastructure.ChecklistItemResultRepository
 import com.example.compliance.scan.infrastructure.ComplianceEvaluationRepository
@@ -19,13 +20,16 @@ class ReportService(
     fun scanSummary(scanTaskId: Long): ScanSummary {
         val task = scanTaskRepository.findById(scanTaskId)
             .orElseThrow { BusinessException(404, "scan task not found: $scanTaskId") }
-        val findings = findingRepository.findByProjectScanTask(scanTaskId)
+        // R-9.6-b: 统一指标口径——Finding → FindingView 私有映射后经 ReportMetrics 聚合；
+        // publishedItemCount=0 → coveragePercent 恒为 0（ScanSummary DTO 不暴露该字段，无影响）。
+        val views = findingRepository.findByProjectScanTask(scanTaskId).map { it.toView() }
+        val metrics = ReportMetrics.from(views, score = null, publishedItemCount = 0)
         return ScanSummary(
             scanTaskId = task.id!!,
             engine = task.engine,
             status = task.status.name,
-            findingCount = findings.size,
-            bySeverity = findings.groupingBy { it.severity }.eachCount(),
+            findingCount = metrics.total,
+            bySeverity = metrics.bySeverity,
         )
     }
 
@@ -53,4 +57,10 @@ class ReportService(
             .findAllByProjectIdAndCreatedAtGreaterThanEqualOrderByCreatedAtAsc(projectId, since)
             .map { TrendPoint(it.createdAt.toString(), it.score, it.failed) }
     }
+
+    /** Finding → FindingView 私有映射（与 FindingLifecycleService.toView 同形）。 */
+    private fun com.example.compliance.result.domain.Finding.toView() = FindingView(
+        id!!, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber,
+        firstSeenAt, lastSeenAt, occurrenceCount, engine,
+    )
 }

@@ -2,6 +2,7 @@ package com.example.compliance.report.application
 
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.result.domain.Finding
+import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.scan.domain.ChecklistItemResult
 import com.example.compliance.scan.domain.ComplianceEvaluation
@@ -14,6 +15,7 @@ import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.Optional
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -31,14 +33,29 @@ class ReportServiceTest {
             ScanTask().apply { id = 1L; projectId = 1L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCESS }
         )
         every { findingRepository.findByProjectScanTask(1L) } returns listOf(
-            Finding().apply { severity = "HIGH" },
-            Finding().apply { severity = "HIGH" },
-            Finding().apply { severity = "MEDIUM" },
+            finding("HIGH"),
+            finding("HIGH"),
+            finding("MEDIUM"),
         )
         val summary = service.scanSummary(1L)
         assertEquals(3, summary.findingCount)
         assertEquals(2, summary.bySeverity["HIGH"])
         assertEquals(1, summary.bySeverity["MEDIUM"])
+    }
+
+    // R-9.6-c: scanSummary 现经 Finding → FindingView 私有映射喂给 ReportMetrics，12 字段须全部初始化
+    // （lateinit 未设置会抛 UninitializedPropertyAccessException）。severity 由调用方指定。
+    private fun finding(severity: String) = Finding().apply {
+        id = 1L
+        ruleCode = "R1"
+        status = FindingStatus.NEW
+        filePath = "A.java"
+        lineNumber = 1
+        firstSeenAt = Instant.now()
+        lastSeenAt = Instant.now()
+        occurrenceCount = 1
+        engine = "STUB"
+        this.severity = severity
     }
 
     @Test
