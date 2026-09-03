@@ -1,0 +1,38 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Found a generic API key",
+    "StartLine": 12,
+    "EndLine": 12,
+    "StartColumn": 18,
+    "EndColumn": 50,
+    "Match": "apiKey = \"sk-1234567890abcdef\"",
+    "Secret": "sk-1234567890abcdef",
+    "File": "src/main/resources/application.yml",
+    "Commit": "",
+    "Entropy": 3.5,
+    "Author": "",
+    "Email": "",
+    "Date": "",
+    "Message": "",
+    "Severity": "HIGH"
+  },
+  {
+    "RuleID": "aws-access-token",
+    "Description": "AWS Access Token",
+    "StartLine": 5,
+    "EndLine": 5,
+    "StartColumn": 10,
+    "EndColumn": 30,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": ".env",
+    "Commit": "",
+    "Entropy": 2.8,
+    "Author": "",
+    "Email": "",
+    "Date": "",
+    "Message": "",
+    "Severity": ""
+  }
+]
