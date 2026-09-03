@@ -58,7 +58,7 @@ class ScanTaskService(
         return scanTaskRepository.save(task)
     }
 
-    fun findings(scanTaskId: Long) = findingRepository.findByScanTaskId(scanTaskId)
+    fun findings(scanTaskId: Long) = findingRepository.findByProjectScanTask(scanTaskId)
 
     /** 扫描的合规评估结果（评估 + 逐条结果）；无评估返回空视图。 */
     fun complianceResults(scanTaskId: Long): ComplianceResultView {
