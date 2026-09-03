@@ -1,0 +1,42 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "path/to/workdir",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-1234",
+          "PkgName": "lodash",
+          "InstalledVersion": "4.17.20",
+          "FixedVersion": "4.17.21",
+          "Severity": "CRITICAL",
+          "CVSS": {
+            "nvd": { "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "V3Score": 9.8, "V2Vector": "AV:N/AC:L/Au:N/C:C/I:C/A:C", "V2Score": 7.5 }
+          },
+          "Title": "lodash: prototype pollution",
+          "Description": "Affected versions of lodash are vulnerable to prototype pollution."
+        },
+        {
+          "VulnerabilityID": "CVE-2024-5678",
+          "PkgName": "axios",
+          "InstalledVersion": "0.21.1",
+          "FixedVersion": "0.21.4",
+          "Severity": "UNKNOWN",
+          "CVSS": {},
+          "Title": "axios: cross-site scripting",
+          "Description": ""
+        }
+      ]
+    },
+    {
+      "Target": "go.mod",
+      "Class": "lang-pkgs",
+      "Type": "golang",
+      "Vulnerabilities": null
+    }
+  ]
+}
