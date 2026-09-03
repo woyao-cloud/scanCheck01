@@ -56,6 +56,12 @@ data class RawFinding(
     val message: String? = null,
     val codeSnippet: String? = null,
     val category: String? = null,
+    // M11 依赖类字段（Trivy 使用；代码类引擎恒为 null）。追加在末尾带默认值 → 既有位置调用点零破坏。
+    val packageName: String? = null,
+    val packageVersion: String? = null,
+    val fixedVersion: String? = null,
+    val cveId: String? = null,
+    val cvssScore: Double? = null,
 )
 
 data class ScanResult(
