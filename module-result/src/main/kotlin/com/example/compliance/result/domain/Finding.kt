@@ -45,6 +45,14 @@ class Finding : BaseEntity() {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_json", columnDefinition = "jsonb")
     var rawJson: String? = null
+    // M11 依赖类字段（Trivy 使用；代码类恒 null）
+    var packageName: String? = null
+    var packageVersion: String? = null
+    var fixedVersion: String? = null
+    var cveId: String? = null
+    // cvssScore：实体持 BigDecimal ↔ V12 列 NUMERIC（先例 checklist.score_weight / scan.score）；
+    // DTO（RawFinding/NewFinding/FindingView）持 Double，边界转换 toBigDecimal / toDouble。
+    var cvssScore: java.math.BigDecimal? = null
     @Version
     @Column(name = "version", nullable = false)
     var version: Long = 0

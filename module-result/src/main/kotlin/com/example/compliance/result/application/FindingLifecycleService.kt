@@ -96,6 +96,7 @@ class FindingLifecycleService(
     private fun com.example.compliance.result.domain.Finding.toView() = FindingView(
         id!!, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber,
         firstSeenAt, lastSeenAt, occurrenceCount, engine,
+        packageName, packageVersion, fixedVersion, cveId, cvssScore?.toDouble(),
     )
 
     private fun quote(s: String?): String = "\"${s?.replace("\"", "\\\"") ?: ""}\""

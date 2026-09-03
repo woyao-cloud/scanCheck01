@@ -82,4 +82,57 @@ class FindingServiceTest {
         assertEquals(UpsertResult(1, 0), result)
         verify { historyRepository.save(match { it.action == "CREATED" && it.scanTaskId == 50L }) }
     }
+
+    @Test
+    fun `dependency finding uses dependency fingerprint and persists dependency fields`() {
+        val fpDep = "fp-dep"
+        val dep = NewFinding("M11TRV", "lodash proto pollution", "package-lock.json", null, "CRITICAL", null, "pollution", null,
+            "lodash", "4.17.20", "4.17.21", "CVE-2024-1234", 9.8)
+        every { fingerprintGenerator.generateDependency(9L, "lodash", "4.17.20", "CVE-2024-1234") } returns fpDep
+        every { findingRepository.findByProjectIdAndFingerprint(9L, fpDep) } returns null
+        every { findingRepository.save(any<Finding>()) } answers { firstArg<Finding>().apply { id = 1L } }
+        every { historyRepository.save(any<FindingHistory>()) } answers { firstArg<FindingHistory>() }
+
+        val result = findingService.upsertByFingerprint(9L, 60L, "TRIVY", listOf(dep))
+
+        assertEquals(UpsertResult(1, 0), result)
+        verify { findingRepository.save(match {
+            it.fingerprint == fpDep && it.packageName == "lodash" && it.cveId == "CVE-2024-1234" &&
+            it.packageVersion == "4.17.20" && it.fixedVersion == "4.17.21" && it.cvssScore == 9.8.toBigDecimal()
+        }) }
+        verify { historyRepository.save(match { it.action == "CREATED" && it.scanTaskId == 60L }) }
+    }
+
+    @Test
+    fun `reappearing dependency finding increments occurrence and keeps active state`() {
+        val fpDep = "fp-dep-re"
+        val existing = Finding().apply { id = 7L; projectId = 9L; status = FindingStatus.NEW; fingerprint = fpDep; occurrenceCount = 1 }
+        every { fingerprintGenerator.generateDependency(9L, "lodash", "4.17.20", "CVE-2024-1234") } returns fpDep
+        every { findingRepository.findByProjectIdAndFingerprint(9L, fpDep) } returns existing
+        every { findingRepository.save(any<Finding>()) } answers { firstArg() }
+        every { historyRepository.save(any<FindingHistory>()) } answers { firstArg<FindingHistory>() }
+
+        val dep = NewFinding("M11TRV", "lodash proto pollution", "package-lock.json", null, "CRITICAL", null, "pollution", null,
+            "lodash", "4.17.20", "4.17.21", "CVE-2024-1234", 9.8)
+        val result = findingService.upsertByFingerprint(9L, 61L, "TRIVY", listOf(dep))
+
+        assertEquals(UpsertResult(0, 1), result)
+        assertEquals(FindingStatus.NEW, existing.status)   // 活动集 → 状态保持
+        assertEquals(2, existing.occurrenceCount)
+        verify { historyRepository.save(match { it.action == "REAPPEARED" && it.scanTaskId == 61L }) }
+    }
+
+    @Test
+    fun `code finding path is unchanged`() {
+        val fp = "fp-code"
+        every { fingerprintGenerator.generate(9L, "R1", "A.java", 1, "s") } returns fp
+        every { findingRepository.findByProjectIdAndFingerprint(9L, fp) } returns null
+        every { findingRepository.save(any<Finding>()) } answers { firstArg<Finding>().apply { id = 1L } }
+        every { historyRepository.save(any<FindingHistory>()) } answers { firstArg<FindingHistory>() }
+
+        findingService.upsertByFingerprint(9L, 62L, "STUB", listOf(newFinding))
+
+        verify { findingRepository.save(match { it.fingerprint == fp && it.packageName == null && it.cveId == null }) }
+        verify(exactly = 0) { fingerprintGenerator.generateDependency(any(), any(), any(), any()) }
+    }
 }

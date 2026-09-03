@@ -16,6 +16,11 @@ data class FindingView(
     val lastSeenAt: java.time.Instant,
     val occurrenceCount: Int,
     val engine: String = "",   // 发现引擎（M7 复扫定位、M8 引擎契约断言消费）
+    val packageName: String? = null,      // M11 依赖字段
+    val packageVersion: String? = null,
+    val fixedVersion: String? = null,
+    val cveId: String? = null,
+    val cvssScore: Double? = null,
 )
 
 /** 证据 DTO（P2-D5：端口不泄漏实体）。 */

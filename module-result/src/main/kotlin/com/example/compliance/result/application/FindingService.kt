@@ -19,6 +19,12 @@ data class NewFinding(
     val category: String?,
     val message: String?,
     val codeSnippet: String?,
+    // M11 依赖类字段（Trivy 使用；代码类恒 null）。末尾默认值 → 既有 8 参位置调用点零破坏。
+    val packageName: String? = null,
+    val packageVersion: String? = null,
+    val fixedVersion: String? = null,
+    val cveId: String? = null,
+    val cvssScore: Double? = null,
 )
 
 data class UpsertResult(val created: Int, val updated: Int)
@@ -48,7 +54,11 @@ class FindingService(
         var created = 0
         var updated = 0
         for (f in findings) {
-            val fingerprint = fingerprintGenerator.generate(projectId, f.ruleCode, f.filePath, f.lineNumber, f.codeSnippet)
+            // M11：依赖类（packageName/cveId 非空）走依赖指纹（plan.md §7.3）；否则代码类既有指纹
+            val fingerprint = if (f.packageName != null || f.cveId != null)
+                fingerprintGenerator.generateDependency(projectId, f.packageName!!, f.packageVersion, f.cveId!!)
+            else
+                fingerprintGenerator.generate(projectId, f.ruleCode, f.filePath, f.lineNumber, f.codeSnippet)
             val existing = findingRepository.findByProjectIdAndFingerprint(projectId, fingerprint)
             if (existing == null) {
                 findingRepository.save(Finding().apply {
@@ -63,6 +73,11 @@ class FindingService(
                     category = f.category
                     message = f.message
                     codeSnippet = f.codeSnippet
+                    packageName = f.packageName        // M11 依赖字段
+                    packageVersion = f.packageVersion
+                    fixedVersion = f.fixedVersion
+                    cveId = f.cveId
+                    cvssScore = f.cvssScore?.toBigDecimal()   // Double → BigDecimal（实体持 NUMERIC 列）
                     this.fingerprint = fingerprint
                 }).let { saved ->
                     historyRepository.save(FindingHistory().apply {
