@@ -86,17 +86,69 @@ class RemediationServiceTest {
             com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
         every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
 
-        val result = service.markFixed(7L, 9L, "FIX_COMMIT", "deadbeef")
+        val result = service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
 
         assertEquals(FindingStatus.FIXED, result.finding.status)
         verify { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) }
     }
 
     @Test
+    fun `markFixed rejects non-assignee non-admin actor with 403`() {
+        // F4 (final review I6): 服务端校验受让人 —— 调用者非受让人且无 ADMIN → 403
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXING)
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply {
+            id = 11L; findingId = 7L; assigneeUserId = 3L; createdAt = Instant.now()
+        }
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
+        }
+        assertEquals(403, ex.code)
+        assertEquals("only the assignee can mark fixed", ex.message)
+    }
+
+    @Test
+    fun `markFixed accepts the assignee`() {
+        // F4: actorId == assigneeUserId → 通过
+        every { lifecyclePort.findById(7L) } returnsMany listOf(
+            view(FindingStatus.FIXING),
+            view(FindingStatus.FIXED),
+        )
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply {
+            id = 11L; findingId = 7L; assigneeUserId = 9L; createdAt = Instant.now()
+        }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) } returns
+            com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
+        every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
+
+        val result = service.markFixed(7L, 9L, emptySet(), "FIX_COMMIT", "deadbeef")
+        assertEquals(FindingStatus.FIXED, result.finding.status)
+    }
+
+    @Test
+    fun `markFixed allows admin override for non-assignee`() {
+        // F4: actorId 非受让人但带 ROLE_ADMIN → ADMIN 覆写通过
+        every { lifecyclePort.findById(7L) } returnsMany listOf(
+            view(FindingStatus.FIXING),
+            view(FindingStatus.FIXED),
+        )
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply {
+            id = 11L; findingId = 7L; assigneeUserId = 3L; createdAt = Instant.now()
+        }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) } returns
+            com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
+        every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
+
+        val result = service.markFixed(7L, 9L, setOf("ROLE_ADMIN"), "FIX_COMMIT", "deadbeef")
+        assertEquals(FindingStatus.FIXED, result.finding.status)
+    }
+
+    @Test
     fun `fixed without evidence is rejected`() {
         every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXING)
         val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
-            service.markFixed(7L, 9L, "", "")
+            service.markFixed(7L, 9L, emptySet(), "", "")
         }
         assertEquals("evidence required for fixed", ex.message)
     }

@@ -168,6 +168,21 @@ class ScanOrchestrator(
             task.errorMessage = e.message?.take(500)
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
+            // F5 (final review I9): 复扫任务失败 → 把 RECHECKING finding 补偿回退 FIXED，避免卡死
+            // （verifyRechecking 只在任务成功路径执行；RECHECKING 无其他出口）。Ruling #52：transition
+            // 自带事务自提交。runCatching 保证补偿失败绝不影响上方的 FAILED 落库。
+            task.requestId?.takeIf { it.startsWith("recheck-f") }?.let { requestId ->
+                requestId.removePrefix("recheck-f").toLongOrNull()?.let { findingId ->
+                    runCatching {
+                        lifecycleService.transition(
+                            findingId,
+                            com.example.compliance.result.domain.FindingStatus.FIXED,
+                            "recheck_failed_scan_$scanTaskId",
+                            null,
+                        )
+                    }
+                }
+            }
             log(scanTaskId, "SCAN", "ERROR", e.message ?: "unknown failure")
         } finally {
             // spec §5.1/§5.2：adapter cleanup + 删除检出临时目录（均幂等，绝不触碰用户路径）

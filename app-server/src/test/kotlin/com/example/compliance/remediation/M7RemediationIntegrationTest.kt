@@ -105,12 +105,14 @@ class M7RemediationIntegrationTest : AbstractIntegrationTest() {
         return lifecyclePort.findingsForScanTask(task1.id!!).first().id
     }
 
-    /** 走完整改路径到 FIXED：confirm → assign → fixing → fixed(evidence)。 */
+    /** 走完整改路径到 FIXED：confirm → assign → fixing → fixed(evidence)。
+     *  F4 (final review I6): markFixed 新增受让人校验 —— 测试以系统/管理员身份（ROLE_ADMIN）覆写，
+     *  使 actorId=1L（非受让人 3L）也能通过。 */
     private fun walkToFixed(findingId: Long) {
         remediationService.confirm(findingId, 1L)
         remediationService.assign(findingId, 1L, 3L, "fix plan", null)
         remediationService.startFix(findingId, 1L)
-        remediationService.markFixed(findingId, 1L, "FIX_COMMIT", "abc123")
+        remediationService.markFixed(findingId, 1L, setOf("ROLE_ADMIN"), "FIX_COMMIT", "abc123")
         assertEquals(FindingStatus.FIXED, lifecyclePort.findById(findingId)!!.status)
     }
 

@@ -1,6 +1,7 @@
 package com.example.compliance.auth.config
 
 import com.example.compliance.auth.application.JwtService
+import com.example.compliance.common.auth.AuthPrincipal
 import com.example.compliance.user.application.UserService
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
@@ -35,8 +36,12 @@ class JwtAuthenticationFilter(
                 if (user != null && user.status == "ACTIVE") {
                     val authorities = userService.findRoles(user.id!!)
                         .map { SimpleGrantedAuthority("ROLE_" + it.code) }
+                    // F4 (final review I6): principal 携带真实用户身份（AuthPrincipal），
+                    // remediation/审计可解析真实 userId，而非占位 1L。name 仍为 username（AuthenticatedPrincipal）。
                     val authentication = UsernamePasswordAuthenticationToken(
-                        user.username, null, authorities,
+                        AuthPrincipal(user.id!!, user.username, authorities.map { it.authority }.toSet()),
+                        null,
+                        authorities,
                     )
                     authentication.details = WebAuthenticationDetailsSource().buildDetails(request)
                     SecurityContextHolder.getContext().authentication = authentication

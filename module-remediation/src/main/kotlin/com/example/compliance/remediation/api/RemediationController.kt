@@ -1,5 +1,6 @@
 package com.example.compliance.remediation.api
 
+import com.example.compliance.common.auth.AuthPrincipal
 import com.example.compliance.remediation.application.FindingRemediationView
 import com.example.compliance.remediation.application.RemediationService
 import com.example.compliance.result.domain.FindingStatus
@@ -26,24 +27,27 @@ class RemediationController(private val service: RemediationService) {
     ): List<FindingRemediationView> = service.list(projectId, status, severity, page, size)
 
     @PostMapping("/findings/{id}/confirm")
-    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
+    // F3 (final review I5): ADMIN 全 ✓（spec §6.1 矩阵）
+    @PreAuthorize("hasAnyRole('ADMIN','COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun confirm(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.confirm(id, actorId(auth))
 
     @PostMapping("/findings/{id}/assign")
-    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
+    @PreAuthorize("hasAnyRole('ADMIN','COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun assign(@PathVariable id: Long, @RequestBody cmd: AssignCommand, auth: Authentication?): FindingRemediationView =
         service.assign(id, actorId(auth), cmd.assigneeId, cmd.plan, cmd.dueDate)
 
     @PostMapping("/findings/{id}/fixing")
-    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER','DEVELOPER')")
+    // F3 (final review m9): spec §4.2 ASSIGNED→FIXING = 受让人(DEVELOPER) + PROJECT_OWNER —— 去掉 COMPLIANCE_MANAGER 超授权
+    @PreAuthorize("hasAnyRole('ADMIN','PROJECT_OWNER','DEVELOPER')")
     fun fixing(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.startFix(id, actorId(auth))
 
     @PostMapping("/findings/{id}/fixed")
+    // F3/F4 (spec §6.1): 任意已登录用户可调；服务端校验受让人（见 markFixed）
     @PreAuthorize("isAuthenticated()")
     fun fixed(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
-        service.markFixed(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
+        service.markFixed(id, actorId(auth), actorAuthorities(auth), cmd.evidenceType, cmd.evidenceRef)
 
     @PostMapping("/findings/{id}/evidence")
     @PreAuthorize("isAuthenticated()")
@@ -51,7 +55,7 @@ class RemediationController(private val service: RemediationService) {
         service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
 
     @PostMapping("/findings/{id}/recheck")
-    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
+    @PreAuthorize("hasAnyRole('ADMIN','COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun recheck(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.requestRecheck(id, actorId(auth))
 
@@ -63,13 +67,16 @@ class RemediationController(private val service: RemediationService) {
     )
 
     @PutMapping("/findings/{id}/status")
-    @PreAuthorize("hasRole('COMPLIANCE_MANAGER')")
+    // F3 (final review I5): status 仅 ADMIN / COMPLIANCE_MANAGER（终态转移是高权限操作）
+    @PreAuthorize("hasAnyRole('ADMIN','COMPLIANCE_MANAGER')")
     fun status(@PathVariable id: Long, @RequestBody cmd: StatusCommand, auth: Authentication?): FindingRemediationView =
         service.status(id, cmd.status, cmd.reason, cmd.evidenceType ?: "", cmd.evidenceRef ?: "", actorId(auth))
 
-    private fun actorId(@Suppress("UNUSED_PARAMETER") auth: Authentication?): Long {
-        // module-common 目前无 AuthPrincipal 类型，占位返回 1L（系统操作者）；
-        // M9 RBAC 接入时在此解析 principal 的真实用户身份。
-        return 1L
-    }
+    /** 真实用户 id（F4, final review I6）：AuthPrincipal 解析；@WithMockUser 等 String principal 回落 1L（系统/测试操作者）。 */
+    private fun actorId(auth: Authentication?): Long =
+        (auth?.principal as? AuthPrincipal)?.userId ?: 1L
+
+    /** 调用方 authorities（F4）：markFixed 的 ADMIN 覆受让人校验用；无 AuthPrincipal 时回落空集。 */
+    private fun actorAuthorities(auth: Authentication?): Set<String> =
+        (auth?.principal as? AuthPrincipal)?.authorities ?: emptySet()
 }

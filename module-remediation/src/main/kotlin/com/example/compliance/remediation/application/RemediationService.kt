@@ -82,15 +82,21 @@ class RemediationService(
         return mirrorTransition(findingId, FindingStatus.FIXING, "fix_started", actorId)
     }
 
-    /** 标记修复：FIXING → FIXED，必附 evidence。 */
+    /** 标记修复：FIXING → FIXED，必附 evidence。
+     *  F4 (final review I6): 服务端校验受让人 —— spec §6.1 任意已登录用户可调端点，但只有
+     *  受让人（或 ADMIN 覆写）可把该 finding 标记为已修复。未派单/受让人为空时不校验（保持原行为）。 */
     @Transactional
-    fun markFixed(findingId: Long, actorId: Long, evidenceType: String, evidenceRef: String): FindingRemediationView {
+    fun markFixed(findingId: Long, actorId: Long, actorAuthorities: Set<String>, evidenceType: String, evidenceRef: String): FindingRemediationView {
         val finding = mustGetFinding(findingId)
         if (evidenceType.isBlank() || evidenceRef.isBlank()) {
             throw BusinessException(400, "evidence required for fixed")
         }
         if (finding.status != FindingStatus.FIXING) {
             throw BusinessException(409, "finding not in FIXING state: $findingId")
+        }
+        val assignee = taskRepository.findByFindingId(findingId)?.assigneeUserId
+        if (assignee != null && actorId != assignee && "ROLE_ADMIN" !in actorAuthorities) {
+            throw BusinessException(403, "only the assignee can mark fixed")
         }
         lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
         return mirrorTransition(findingId, FindingStatus.FIXED, "fixed", actorId)
