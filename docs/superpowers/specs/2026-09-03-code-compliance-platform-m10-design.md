@@ -44,11 +44,11 @@
 
 `module-admin` 新增依赖 `module-project`、`module-scan`、`module-result`。取数一律经各模块暴露的 **port 接口 / 查询方法**（value type 进出），杜绝跨模块 @Entity：
 
-- **projectCount**：module-project 新增 `ProjectQueryPort { fun count(): Long }`（或 `listViews(): List<ProjectView>`）——现 `ProjectService.list()` 返回 @Entity 不可直接暴露，须加 DTO 出口。最小实现：`ProjectService : ProjectQueryPort`，`count()` 返回 `projectRepository.count()`。
-- **scanTaskCount + 任务列表**：module-scan 新增 `ScanTaskQueryPort { fun list(projectId, engine, status, page, size): List<ScanTaskView>; fun count(...): Long }`。`ScanTaskService` 实现（`scanTaskRepository.findAll()` + 过滤 + subList，沿用 remediation 模式）。`ScanTaskView` 已有（`triggerScan` 返回）——复用或对齐其字段。
-- **findingCount + 严重级分布 + 全局 finding**：module-result 的 `FindingLifecyclePort` 扩展 `fun findingsGlobal(projectId: Long?, status: FindingStatus?, severity: String?, page: Int, size: Int): List<FindingView>`（`findAll()` + 过滤 + subList）与 `fun countAll(projectId: Long?): Long`。`FindingView` 已有（含 severity）——severity 分布由 admin 聚合 `findingsGlobal` 或独立 `severityDistribution()` 返回。
+- **projectCount**：module-project 新增 `ProjectQueryPort { fun count(): Long }` ——现 `ProjectService.list()` 返回 @Entity 不可直接暴露，须加 DTO 出口。最小实现：`ProjectService : ProjectQueryPort`，`count()` 返回 `projectRepository.count()`。
+- **scanTaskCount + 任务列表**：module-scan 新增 `ScanTaskQueryPort { fun list(projectId: Long?, engine: String?, status: ScanTaskStatus?): List<ScanTaskView> }`（**不过滤分页**——分页/计数由 admin 侧按 `RemediationService.list` 模式切片）。`ScanTaskService` 实现（`scanTaskRepository.findAll()` + 过滤 + 按 id 倒序）。`ScanTaskView` 已有（`triggerScan` 返回）——复用其字段与映射。
+- **findingCount + 严重级分布 + 全局 finding**：module-result 的 `FindingLifecyclePort` 扩展 `fun findingsGlobal(projectId: Long?, status: FindingStatus?, severity: String?): List<FindingView>`（`findAll()` + 过滤，同样不过滤分页）。`FindingView` 已有（含 severity）——count/severity 分布/分页全由 admin 从该列表聚合（MVP 与 `RemediationService.list` 口径一致）。
 
-> 每个 query port 的精确签名在 plan 阶段钉死；本 spec 只定边界与返回类型。**「少建端口」优先**：能用既有方法（`ProjectService.list()` 之外的 `count()`）就不加抽象。
+> 每个 query port 的精确签名在 plan 阶段钉死；本 spec 只定边界与返回类型。**「少建端口」优先**：能用既有方法（`ProjectService.list()` 之外的 `count()`）就不加抽象。**R-10.5-a（plan 细化）**：端口返回未分页过滤列表，分页/计数由 admin 侧切片 —— 与 `RemediationService.list` MVP 模式完全一致，避免每端口重复分页逻辑。
 
 ### 2.4 测试
 
@@ -89,9 +89,10 @@ interface NotificationSender {
 
 ### 3.3 模块依赖变化
 
-- `module-notification` 新增依赖 `module-common`（已有）+ `module-result` + `module-remediation`（监听器引用事件类）。事件类在 common，但**监听器方法签名引用具体事件类型** → notification 需依赖发布模块以编译。
-  - 替代：把监听器方法参数类型改为 `Object`/泛型再 cast —— 不采用（类型安全优先）。
-  - 方向性：module-notification 依赖 module-result / module-remediation（消费方向），发布方**不**依赖 notification —— 这是「发布方零依赖」的关键收益。
+**零新增跨模块依赖边。** 事件类放 `module-common`，发布方与监听方都只引用 common 类型：
+
+- 发布方（`module-result` 的 verifyRechecking、`module-remediation` 的 status）：注入 Spring 的 `ApplicationEventPublisher`（Spring-context，随 spring-boot-starter 已在所有模块 classpath），`publishEvent(common.event.FindingRegressionEvent / RemediationWaiverEvent)` —— 不依赖 notification，不新增依赖边。
+- 监听方（`module-notification` 的 `NotificationEventListener`）：方法签名引用 common 事件类型 → 仅依赖 module-common（已有），**不新增** module-result / module-remediation 依赖。
 
 ### 3.4 测试
 
@@ -149,10 +150,10 @@ interface NotificationSender {
 | 模块 | 新增依赖 | 说明 |
 |---|---|---|
 | `module-admin` | `module-project`、`module-scan`、`module-result` | 三端点取数（P2-D5：port/查询方法，value type 进出） |
-| `module-notification` | `module-result`、`module-remediation` | 监听器引用事件类；发布方（result/remediation）**零**依赖 notification |
+| `module-notification` | — | 监听器引用 common 事件类型（§3.3 修正：事件类在 common → **零新增依赖边**） |
 | `module-common` | — | 新增 `common.event`（两事件类）+ `PageView<T>` |
 | `module-scan` | — | 新增 `ScanTaskQueryPort` + 实现 |
-| `module-result` | — | `FindingLifecyclePort` 扩展 `findingsGlobal`/`countAll`；verifyRechecking 签名变化 |
+| `module-result` | — | `FindingLifecyclePort` 扩展 `findingsGlobal`（未分页过滤列表，R-10.5-a）；verifyRechecking 签名变化 |
 | `module-project` | — | 新增 `ProjectQueryPort`（count） |
 | `module-remediation` | — | `status(WAIVED)` 发布事件；`markFixed` 签名调整（清理②） |
 | `module-rule` | — | `repos.kt` 派生查询 + `RuleQueryService.findByRuleCode` 委托 |
