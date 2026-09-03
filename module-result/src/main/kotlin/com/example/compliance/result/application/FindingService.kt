@@ -2,9 +2,9 @@ package com.example.compliance.result.application
 
 import com.example.compliance.result.domain.Finding
 import com.example.compliance.result.domain.FindingStatus
-import com.example.compliance.result.domain.FindingTrace
+import com.example.compliance.result.domain.FindingHistory
 import com.example.compliance.result.infrastructure.FindingRepository
-import com.example.compliance.result.infrastructure.FindingTraceRepository
+import com.example.compliance.result.infrastructure.FindingHistoryRepository
 import com.example.compliance.result.infrastructure.FingerprintGenerator
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -26,7 +26,7 @@ data class UpsertResult(val created: Int, val updated: Int)
 @Service
 class FindingService(
     private val findingRepository: FindingRepository,
-    private val traceRepository: FindingTraceRepository,
+    private val traceRepository: FindingHistoryRepository,
     private val fingerprintGenerator: FingerprintGenerator,
 ) {
     /** 按指纹去重写入：新指纹插入（CREATED），已有指纹累加出现次数并回到 OPEN（UPDATED）。 */
@@ -53,7 +53,7 @@ class FindingService(
                         this.fingerprint = fingerprint
                     }
                 )
-                traceRepository.save(FindingTrace().apply {
+                traceRepository.save(FindingHistory().apply {
                     findingId = saved.id!!; this.scanTaskId = scanTaskId; action = "CREATED"
                 })
                 created++
@@ -62,7 +62,7 @@ class FindingService(
                 existing.lastSeenAt = Instant.now()
                 existing.status = FindingStatus.NEW
                 findingRepository.save(existing)
-                traceRepository.save(FindingTrace().apply {
+                traceRepository.save(FindingHistory().apply {
                     findingId = existing.id!!; this.scanTaskId = scanTaskId; action = "UPDATED"
                 })
                 updated++
