@@ -41,6 +41,8 @@ class ScanOrchestrator(
     private val findingRepository: FindingRepository,
     private val ruleQueryService: RuleQueryService,
     private val complianceEvaluator: ComplianceEvaluator,
+    private val checklistQueryService: com.example.compliance.checklist.application.ChecklistQueryService,
+    private val lifecycleService: com.example.compliance.result.application.FindingLifecycleService,
 ) {
     private val objectMapper = ObjectMapper()
 
@@ -57,6 +59,9 @@ class ScanOrchestrator(
         task.startedAt = Instant.now()
         scanTaskRepository.save(task)
         log(scanTaskId, "SCAN", "INFO", "start engine=${task.engine} project=${task.projectId}")
+        val version = checklistQueryService.publishedVersionForProject(task.projectId)
+        task.checklistVersionId = version?.id
+        log(scanTaskId, "PREPARE", "INFO", "checklistVersionId=${version?.id ?: "none"}")
         try {
             val repo = repoRepository.findByProjectId(task.projectId).firstOrNull()
                 ?: throw BusinessException(400, "project has no repository bound")
@@ -73,9 +78,11 @@ class ScanOrchestrator(
 
             val normalized = ArrayList<NewFinding>()
             var skipped = 0
+            val ruleIds = mutableSetOf<Long>()
             for (raw in result.findings) {
                 val rule = ruleQueryService.publishedRuleByEngineRuleId(task.engine, raw.engineRuleId)
                 if (rule == null) { skipped++; continue }
+                ruleIds += rule.id!!
                 normalized += NewFinding(
                     rule.ruleCode, rule.name, raw.filePath, raw.line,
                     raw.severity, raw.category, raw.message, raw.codeSnippet,
@@ -84,7 +91,13 @@ class ScanOrchestrator(
             log(scanTaskId, "NORMALIZE", "INFO", "raw=${result.findings.size} mapped=${normalized.size} skipped=$skipped")
 
             val upsert = findingService.upsertByFingerprint(task.projectId, scanTaskId, task.engine, normalized)
-            val findings = findingRepository.findByScanTaskId(scanTaskId)
+            val findings = findingRepository.findByProjectScanTask(scanTaskId)
+            // 复扫验证（M7 闭环）：RECHECKING finding 缺席→CLOSED，命中→回归 CONFIRMED
+            val presentIds = findings.mapNotNull { it.id }.toSet()
+            val verify = lifecycleService.verifyRechecking(task.projectId, scanTaskId, presentIds)
+            log(scanTaskId, "VERIFY", "INFO", "rechecking closed=${verify.closed} regressed=${verify.regressed}")
+
+            task.ruleIds = objectMapper.writeValueAsString(ruleIds)
 
             scanJobRepository.save(ScanJob().apply {
                 this.scanTaskId = scanTaskId
@@ -96,11 +109,12 @@ class ScanOrchestrator(
                 findingCount = findings.size
             })
 
-            val evaluations = complianceEvaluator.evaluate(task.projectId, findings)
+            val evaluations = complianceEvaluator.evaluate(task.projectId, task.checklistVersionId, findings)
             if (evaluations.isNotEmpty()) {
                 val evaluation = evaluationRepository.save(ComplianceEvaluation().apply {
                     this.scanTaskId = scanTaskId
                     this.projectId = task.projectId
+                    checklistVersionId = task.checklistVersionId
                     totalItems = evaluations.size
                     passed = evaluations.count { it.result.name == "PASS" }
                     failed = evaluations.count { it.result.name == "FAIL" }
@@ -113,6 +127,7 @@ class ScanOrchestrator(
                         evaluationId = evaluation.id!!
                         itemCode = ev.itemCode
                         this.result = ev.result.name
+                        checklistVersionId = task.checklistVersionId
                         findingCount = ev.findingCount
                         matchedFindingIds = objectMapper.writeValueAsString(ev.matchedFindingIds)
                     })
@@ -121,6 +136,7 @@ class ScanOrchestrator(
 
             task.status = ScanTaskStatus.SUCCESS
             task.findingCount = findings.size
+            task.durationMs = duration
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
             log(scanTaskId, "SCAN", "INFO", "done findings=${findings.size} created=${upsert.created} updated=${upsert.updated} evaluated=${evaluations.size}")

@@ -10,6 +10,7 @@ import com.example.compliance.rule.domain.RuleEvaluationPolicy
 import com.example.compliance.rule.domain.RuleStatus
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
@@ -32,7 +33,7 @@ class ComplianceEvaluatorTest {
             RuleEvaluationPolicy().apply { resultOnMatch = "FAIL"; spElExpression = "severity == 'HIGH'" }
         every { ruleQuery.itemCodesByRuleId(1L) } returns listOf("SEC-001")
 
-        val result = evaluator.evaluate(1L, listOf(finding("SEMGREP-SQLI", "HIGH")))
+        val result = evaluator.evaluate(1L, null, listOf(finding("SEMGREP-SQLI", "HIGH")))
         assertEquals(1, result.size)
         assertEquals("SEC-001", result[0].itemCode)
         assertEquals(ItemResult.FAIL, result[0].result)
@@ -49,7 +50,23 @@ class ComplianceEvaluatorTest {
             RuleEvaluationPolicy().apply { resultOnMatch = "FAIL"; spElExpression = "severity == 'HIGH'" }
         every { ruleQuery.itemCodesByRuleId(1L) } returns listOf("SEC-001")
 
-        val result = evaluator.evaluate(1L, listOf(finding("SEMGREP-SQLI", "MEDIUM")))
+        val result = evaluator.evaluate(1L, null, listOf(finding("SEMGREP-SQLI", "MEDIUM")))
         assertEquals(ItemResult.PASS, result[0].result)
+    }
+
+    @Test
+    fun `evaluate uses version items when checklistVersionId provided`() {
+        val item = ChecklistItem().apply { itemCode = "M6-001"; versionId = 77L }
+        every { checklistQuery.versionItems(77L) } returns listOf(item)
+        every { ruleQuery.findByRuleCode("R1") } returns RuleDefinition().apply { id = 1L; ruleCode = "R1" }
+        every { ruleQuery.policyByRuleId(1L) } returns RuleEvaluationPolicy().apply { spElExpression = "severity == 'HIGH'" }
+        every { ruleQuery.itemCodesByRuleId(1L) } returns listOf("M6-001")
+        val finding = Finding().apply { id = 9L; ruleCode = "R1"; severity = "HIGH" }
+
+        val result = evaluator.evaluate(9L, 77L, listOf(finding))
+
+        assertEquals(1, result.size)
+        assertEquals("M6-001", result[0].itemCode)
+        verify { checklistQuery.versionItems(77L) }
     }
 }

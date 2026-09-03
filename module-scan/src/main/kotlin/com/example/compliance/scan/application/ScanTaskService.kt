@@ -28,7 +28,7 @@ class ScanTaskService(
      *  Ruling #45: 刻意不加 @Transactional —— save 自带事务立即提交，异步线程的
      *  findById 才能看到 PENDING 行；若在未提交事务内 dispatch，@Async 线程可能
      *  先于提交执行 → 任务 404 卡死在 PENDING（executeAsync 的 orElseThrow 在 try 外）。 */
-    fun startScan(projectId: Long, engine: String, ref: String?): ScanTask {
+    fun startScan(projectId: Long, engine: String, ref: String?, triggerType: String = "MANUAL", requestId: String? = null): ScanTask {
         if (registry.get(engine) == null) {
             throw BusinessException(400, "unsupported engine: $engine")
         }
@@ -37,6 +37,8 @@ class ScanTaskService(
             this.projectId = projectId
             this.engine = engine
             this.ref = ref
+            this.triggerType = triggerType
+            this.requestId = requestId ?: java.util.UUID.randomUUID().toString()
         })
         orchestrator.executeAsync(task.id!!)
         return task

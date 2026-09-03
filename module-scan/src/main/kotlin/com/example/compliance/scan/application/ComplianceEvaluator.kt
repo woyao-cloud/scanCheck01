@@ -22,9 +22,11 @@ class ComplianceEvaluator(
         val matchedFindingIds: List<Long>,
     )
 
-    /** 对一次扫描的 findings 做合规判定：按规则映射到清单条目，用 SpEL 策略判定结果。 */
-    fun evaluate(projectId: Long, findings: List<Finding>): List<ItemEvaluation> {
-        val items = checklistQueryService.publishedItemsForProject(projectId) ?: return emptyList()
+    /** 对一次扫描的 findings 做合规判定：优先按版本解析清单条目；versionId 为 null 时回退到项目当前已发布绑定。 */
+    fun evaluate(projectId: Long, checklistVersionId: Long?, findings: List<Finding>): List<ItemEvaluation> {
+        val items = checklistVersionId
+            ?.let { checklistQueryService.versionItems(it) }
+            ?: checklistQueryService.publishedItemsForProject(projectId) ?: return emptyList()
         val itemCodes = items.map { it.itemCode }.toSet()
         val evaluations = mutableListOf<ItemEvaluation>()
 

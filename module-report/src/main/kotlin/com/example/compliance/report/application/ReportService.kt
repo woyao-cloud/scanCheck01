@@ -19,7 +19,7 @@ class ReportService(
     fun scanSummary(scanTaskId: Long): ScanSummary {
         val task = scanTaskRepository.findById(scanTaskId)
             .orElseThrow { BusinessException(404, "scan task not found: $scanTaskId") }
-        val findings = findingRepository.findByScanTaskId(scanTaskId)
+        val findings = findingRepository.findByProjectScanTask(scanTaskId)
         return ScanSummary(
             scanTaskId = task.id!!,
             engine = task.engine,

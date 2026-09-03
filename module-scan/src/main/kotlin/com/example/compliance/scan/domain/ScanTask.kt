@@ -2,6 +2,7 @@ package com.example.compliance.scan.domain
 
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
 import java.time.Instant
 
 @Entity
@@ -20,6 +21,17 @@ class ScanTask : BaseEntity() {
     var status: ScanTaskStatus = ScanTaskStatus.PENDING
     @Column(name = "trigger_type", nullable = false, length = 16)
     var triggerType: String = "MANUAL"
+    @Column(name = "checklist_version_id")
+    var checklistVersionId: Long? = null
+    @JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(name = "rule_ids", columnDefinition = "jsonb")
+    var ruleIds: String? = null
+    @Column(name = "commit_id", length = 64)
+    var commitId: String? = null
+    @Column(name = "duration_ms")
+    var durationMs: Long? = null
+    @Column(name = "request_id", length = 64)
+    var requestId: String? = null
     @Column(name = "created_by")
     var createdBy: Long? = null
     @Column(name = "started_at")

@@ -14,6 +14,8 @@ class ChecklistItemResult : BaseEntity() {
     lateinit var itemCode: String
     @Column(name = "result", nullable = false, length = 16)
     lateinit var result: String
+    @Column(name = "checklist_version_id")
+    var checklistVersionId: Long? = null
     @Column(name = "finding_count", nullable = false)
     var findingCount: Int = 0
     // Ruling #44: String 存 jsonb 列必须 @JdbcTypeCode(SqlTypes.JSON)（orchestrator 会写入 matchedFindingIds）

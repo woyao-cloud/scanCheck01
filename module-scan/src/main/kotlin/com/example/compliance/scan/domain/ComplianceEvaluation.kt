@@ -11,6 +11,8 @@ class ComplianceEvaluation : BaseEntity() {
     var scanTaskId: Long = 0
     @Column(name = "project_id", nullable = false)
     var projectId: Long = 0
+    @Column(name = "checklist_version_id")
+    var checklistVersionId: Long? = null
     @Column(name = "total_items", nullable = false)
     var totalItems: Int = 0
     @Column(name = "passed", nullable = false)

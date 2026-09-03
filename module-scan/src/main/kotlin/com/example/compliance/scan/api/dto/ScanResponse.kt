@@ -14,10 +14,14 @@ data class ScanResponse(
     val status: String,
     val findingCount: Int,
     val errorMessage: String?,
+    val checklistVersionId: Long?,
+    val requestId: String?,
 ) {
     companion object {
-        fun from(t: ScanTask) =
-            ScanResponse(t.id!!, t.projectId, t.engine, t.ref, t.status.name, t.findingCount, t.errorMessage)
+        fun from(t: ScanTask) = ScanResponse(
+            t.id!!, t.projectId, t.engine, t.ref, t.status.name, t.findingCount, t.errorMessage,
+            t.checklistVersionId, t.requestId,
+        )
     }
 }
 

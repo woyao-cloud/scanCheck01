@@ -30,7 +30,7 @@ class ReportServiceTest {
         every { scanTaskRepository.findById(1L) } returns Optional.of(
             ScanTask().apply { id = 1L; projectId = 1L; engine = "SEMGREP"; status = ScanTaskStatus.SUCCESS }
         )
-        every { findingRepository.findByScanTaskId(1L) } returns listOf(
+        every { findingRepository.findByProjectScanTask(1L) } returns listOf(
             Finding().apply { severity = "HIGH" },
             Finding().apply { severity = "HIGH" },
             Finding().apply { severity = "MEDIUM" },
