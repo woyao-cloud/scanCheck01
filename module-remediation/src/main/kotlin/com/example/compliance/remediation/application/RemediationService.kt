@@ -1,5 +1,6 @@
 package com.example.compliance.remediation.application
 
+import com.example.compliance.common.event.RemediationWaiverEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.remediation.domain.RemediationTask
 import com.example.compliance.remediation.infrastructure.RemediationTaskRepository
@@ -7,6 +8,7 @@ import com.example.compliance.result.application.FindingLifecyclePort
 import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.scan.application.ScanTriggerPort
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDate
@@ -17,6 +19,7 @@ class RemediationService(
     private val taskRepository: RemediationTaskRepository,
     private val lifecyclePort: FindingLifecyclePort,
     private val triggerPort: ScanTriggerPort,
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
     /** 派单：创建整改任务并把 finding 置为 ASSIGNED（task.status 镜像写入）。 */
     @Transactional
@@ -135,9 +138,14 @@ class RemediationService(
         if (reason.isBlank() || evidenceType.isBlank() || evidenceRef.isBlank()) {
             throw BusinessException(400, "reason and evidence required for terminal status")
         }
-        mustGetFinding(findingId)
+        val finding = mustGetFinding(findingId)
         lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
-        return mirrorTransition(findingId, to, reason, actorId)
+        val view = mirrorTransition(findingId, to, reason, actorId)
+        // M10 I4：WAIVED 终态发布豁免事件（best-effort，失败由监听器 runCatching 吞掉，不影响本事务）
+        if (to == FindingStatus.WAIVED) {
+            eventPublisher.publishEvent(RemediationWaiverEvent(finding.projectId, findingId, actorId, reason))
+        }
+        return view
     }
 
     /** 请求复扫验证：FIXED → RECHECKING，并创建复扫 ScanTask（trigger_type=MANUAL）。

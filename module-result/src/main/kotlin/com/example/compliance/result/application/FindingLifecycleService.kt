@@ -1,6 +1,7 @@
 package com.example.compliance.result.application
 
 import com.example.compliance.common.audit.AuditService
+import com.example.compliance.common.event.FindingRegressionEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.result.domain.FindingEvidence
 import com.example.compliance.result.domain.FindingStatus
@@ -8,6 +9,7 @@ import com.example.compliance.result.domain.FindingStatusSnapshot
 import com.example.compliance.result.infrastructure.FindingEvidenceRepository
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingStatusSnapshotRepository
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -19,6 +21,7 @@ class FindingLifecycleService(
     private val statusRepository: FindingStatusSnapshotRepository,
     private val evidenceRepository: FindingEvidenceRepository,
     private val auditService: AuditService,
+    private val eventPublisher: ApplicationEventPublisher,
 ) : FindingLifecyclePort {
 
     override fun findingsForScanTask(scanTaskId: Long): List<FindingView> =
@@ -60,17 +63,21 @@ class FindingLifecycleService(
     override fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>, targetFindingIds: Set<Long>): VerifyResult {
         var closed = 0
         var regressed = 0
+        val regressedIds = mutableListOf<Long>()
         findingRepository.findAll()
             .filter { it.projectId == projectId && it.status == FindingStatus.RECHECKING && it.id in targetFindingIds }
             .forEach { finding ->
                 if (finding.id in presentFindingIds) {
                     transition(finding.id!!, FindingStatus.CONFIRMED, "regression_in_scan_$scanTaskId", null)
-                    regressed++
+                    regressed++; regressedIds += finding.id!!
                 } else {
                     transition(finding.id!!, FindingStatus.CLOSED, "verification_passed_in_scan_$scanTaskId", null)
                     closed++
                 }
             }
+        if (regressedIds.isNotEmpty()) {
+            eventPublisher.publishEvent(FindingRegressionEvent(projectId, scanTaskId, regressedIds))
+        }
         return VerifyResult(closed, regressed)
     }
 
