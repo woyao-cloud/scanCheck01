@@ -119,5 +119,8 @@ class FindingLifecycleServiceTest {
         every { findingRepository.findAll() } returns listOf(f1, f2, f3)
         val result = service.findingsGlobal(projectId = 9L, status = FindingStatus.NEW, severity = "HIGH")
         assertEquals(listOf(1L), result.map { it.id })
+        // spec §2.4：severity 过滤大小写不敏感 —— "hIgH" 命中实体 "HIGH"（区分 ignoreCase=true 与 ==）
+        val mixed = service.findingsGlobal(projectId = 9L, status = null, severity = "hIgH")
+        assertEquals(listOf(1L), mixed.map { it.id })
     }
 }
