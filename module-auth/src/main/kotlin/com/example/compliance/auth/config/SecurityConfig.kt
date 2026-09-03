@@ -5,6 +5,7 @@ import com.example.compliance.user.application.UserService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpStatus
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
@@ -14,6 +15,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 @Configuration
 @EnableWebSecurity
+// Task 9.3 (R-9.3-d): activates @PreAuthorize on controller methods — 9.2's
+// ApiTokenAdminController (hasRole ADMIN) and the remediation per-transition matrix.
+@EnableMethodSecurity
 class SecurityConfig(
     private val jwtService: JwtService,
     private val userService: UserService,

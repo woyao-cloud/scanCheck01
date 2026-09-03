@@ -3,6 +3,7 @@ package com.example.compliance.remediation.api
 import com.example.compliance.remediation.application.FindingRemediationView
 import com.example.compliance.remediation.application.RemediationService
 import com.example.compliance.result.domain.FindingStatus
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
 import java.time.LocalDate
@@ -25,26 +26,32 @@ class RemediationController(private val service: RemediationService) {
     ): List<FindingRemediationView> = service.list(projectId, status, severity, page, size)
 
     @PostMapping("/findings/{id}/confirm")
+    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun confirm(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.confirm(id, actorId(auth))
 
     @PostMapping("/findings/{id}/assign")
+    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun assign(@PathVariable id: Long, @RequestBody cmd: AssignCommand, auth: Authentication?): FindingRemediationView =
         service.assign(id, actorId(auth), cmd.assigneeId, cmd.plan, cmd.dueDate)
 
     @PostMapping("/findings/{id}/fixing")
+    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER','DEVELOPER')")
     fun fixing(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.startFix(id, actorId(auth))
 
     @PostMapping("/findings/{id}/fixed")
+    @PreAuthorize("isAuthenticated()")
     fun fixed(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
         service.markFixed(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
 
     @PostMapping("/findings/{id}/evidence")
+    @PreAuthorize("isAuthenticated()")
     fun evidence(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
         service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
 
     @PostMapping("/findings/{id}/recheck")
+    @PreAuthorize("hasAnyRole('COMPLIANCE_MANAGER','PROJECT_OWNER')")
     fun recheck(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
         service.requestRecheck(id, actorId(auth))
 
@@ -56,6 +63,7 @@ class RemediationController(private val service: RemediationService) {
     )
 
     @PutMapping("/findings/{id}/status")
+    @PreAuthorize("hasRole('COMPLIANCE_MANAGER')")
     fun status(@PathVariable id: Long, @RequestBody cmd: StatusCommand, auth: Authentication?): FindingRemediationView =
         service.status(id, cmd.status, cmd.reason, cmd.evidenceType ?: "", cmd.evidenceRef ?: "", actorId(auth))
 
