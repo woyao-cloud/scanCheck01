@@ -11,6 +11,8 @@ import java.time.Instant
 class Finding : BaseEntity() {
     @Column(name = "scan_task_id", nullable = false)
     var scanTaskId: Long = 0
+    @Column(name = "project_id", nullable = false)
+    var projectId: Long = 0
     @Column(name = "engine", nullable = false, length = 32)
     lateinit var engine: String
     @Column(name = "rule_code", nullable = false, length = 128)
@@ -33,7 +35,7 @@ class Finding : BaseEntity() {
     lateinit var fingerprint: String
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
-    var status: FindingStatus = FindingStatus.OPEN
+    var status: FindingStatus = FindingStatus.NEW
     @Column(name = "first_seen_at", nullable = false)
     var firstSeenAt: Instant = Instant.now()
     @Column(name = "last_seen_at", nullable = false)

@@ -60,7 +60,7 @@ class FindingService(
             } else {
                 existing.occurrenceCount += 1
                 existing.lastSeenAt = Instant.now()
-                existing.status = FindingStatus.OPEN
+                existing.status = FindingStatus.NEW
                 findingRepository.save(existing)
                 traceRepository.save(FindingTrace().apply {
                     findingId = existing.id!!; this.scanTaskId = scanTaskId; action = "UPDATED"
