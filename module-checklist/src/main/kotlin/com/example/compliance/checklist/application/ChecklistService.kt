@@ -37,9 +37,10 @@ class ChecklistService(
         val saved = standardRepository.save(ComplianceStandard().apply {
             this.code = code; this.name = name; this.description = description
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "CHECKLIST_CREATED", "checklist", 1L, "checklist_version",
-            saved.id, """{"type":"standard","code":"$code","name":"$name"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("type" to "standard", "code" to saved.code, "name" to saved.name)),
         )
         return saved
     }
@@ -58,9 +59,10 @@ class ChecklistService(
         val version = versionRepository.save(ChecklistVersion().apply {
             checklistId = checklist.id!!; versionNo = "V1"; status = VersionStatus.DRAFT
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "CHECKLIST_CREATED", "checklist", 1L, "checklist_version",
-            version.id, """{"type":"checklist","code":"$code","name":"$name","versionNo":"${version.versionNo}"}""",
+            version.id, objectMapper.writeValueAsString(mapOf("type" to "checklist", "code" to checklist.code, "versionId" to version.id)),
         )
         return checklist
     }
@@ -81,9 +83,10 @@ class ChecklistService(
             waivable = command.waivable
             scoreWeight = command.scoreWeight
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "CHECKLIST_ITEM_ADDED", "checklist", 1L, "checklist_version",
-            version.id!!, """{"itemCode":"${saved.itemCode}","versionId":${version.id!!}}""",
+            version.id!!, objectMapper.writeValueAsString(mapOf("itemCode" to saved.itemCode, "versionId" to version.id!!)),
         )
         return saved
     }
@@ -113,10 +116,10 @@ class ChecklistService(
         version.contentSnapshot = snapshot
         version.publishedAt = Instant.now()
         val saved = versionRepository.save(version)
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "CHECKLIST_PUBLISHED", "checklist", 1L, "checklist_version",
-            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
-            saved.id, """{"checklist":$checklistId,"version":"${saved.versionNo}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("checklist" to checklistId, "version" to saved.versionNo)),
         )
         return saved
     }
@@ -131,9 +134,10 @@ class ChecklistService(
         val binding = bindingRepository.save(ProjectChecklistBinding().apply {
             this.projectId = projectId; this.checklistVersionId = checklistVersionId
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "CHECKLIST_BIND", "checklist", 1L, "project",
-            projectId, """{"checklistVersion":$checklistVersionId}""",
+            projectId, objectMapper.writeValueAsString(mapOf("project" to projectId, "checklistVersion" to checklistVersionId)),
         )
         return binding
     }

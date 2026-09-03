@@ -11,6 +11,7 @@ import com.example.compliance.rule.infrastructure.RuleDefinitionRepository
 import com.example.compliance.rule.infrastructure.RuleEngineBindingRepository
 import com.example.compliance.rule.infrastructure.RuleEvaluationPolicyRepository
 import com.example.compliance.common.audit.AuditService
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -22,6 +23,8 @@ class RuleService(
     private val policyRepository: RuleEvaluationPolicyRepository,
     private val auditService: AuditService,
 ) {
+    private val objectMapper = ObjectMapper()
+
     @Transactional
     fun create(command: CreateRuleCommand): RuleDefinition {
         if (ruleRepository.existsByRuleCode(command.ruleCode)) {
@@ -34,9 +37,10 @@ class RuleService(
             description = command.description
             status = RuleStatus.DRAFT
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_CREATED", "rule", 1L, "rule",
-            saved.id, """{"ruleCode":"${saved.ruleCode}","riskLevel":"${saved.riskLevel}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("ruleCode" to saved.ruleCode, "riskLevel" to saved.riskLevel)),
         )
         return saved
     }
@@ -53,9 +57,10 @@ class RuleService(
             engineRuleId = command.engineRuleId
             engineConfigJson = command.engineConfigJson
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_ENGINE_BIND", "rule", 1L, "rule",
-            saved.id, """{"ruleId":$ruleId,"engine":"${saved.engine}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("ruleId" to ruleId, "engine" to saved.engine)),
         )
         return saved
     }
@@ -67,9 +72,10 @@ class RuleService(
             this.ruleId = ruleId
             this.checklistItemCode = checklistItemCode
         })
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_MAPPING", "rule", 1L, "rule",
-            saved.id, """{"ruleId":$ruleId,"checklistItemCode":"$checklistItemCode"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("ruleId" to ruleId, "checklistItemCode" to checklistItemCode)),
         )
         return saved
     }
@@ -85,9 +91,10 @@ class RuleService(
         policy.policyJson = command.policyJson
         policy.spElExpression = command.spElExpression
         val saved = policyRepository.save(policy)
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_POLICY_SET", "rule", 1L, "rule",
-            saved.id, """{"ruleId":$ruleId,"resultOnMatch":"${saved.resultOnMatch}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("ruleId" to ruleId, "resultOnMatch" to saved.resultOnMatch)),
         )
         return saved
     }
@@ -104,9 +111,10 @@ class RuleService(
         command.riskLevel?.let { rule.riskLevel = it }
         command.description?.let { rule.description = it }
         val saved = ruleRepository.save(rule)
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_UPDATED", "rule", 1L, "rule",
-            saved.id, """{"ruleCode":"${saved.ruleCode}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("ruleCode" to saved.ruleCode)),
         )
         return saved
     }
@@ -119,10 +127,10 @@ class RuleService(
         }
         rule.status = RuleStatus.PUBLISHED
         val saved = ruleRepository.save(rule)
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_PUBLISHED", "rule", 1L, "rule",
-            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
-            saved.id, """{"rule":"${saved.ruleCode}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("rule" to saved.ruleCode)),
         )
         return saved
     }
@@ -132,10 +140,10 @@ class RuleService(
         val rule = require(ruleId)
         rule.status = RuleStatus.DISABLED
         val saved = ruleRepository.save(rule)
+        // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
         auditService.record(
             "RULE_DISABLE", "rule", 1L, "rule_definition",
-            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
-            saved.id, """{"rule":"${saved.ruleCode}"}""",
+            saved.id, objectMapper.writeValueAsString(mapOf("rule" to saved.ruleCode)),
         )
         return saved
     }
