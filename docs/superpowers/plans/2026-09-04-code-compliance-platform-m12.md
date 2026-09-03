@@ -14,7 +14,7 @@
 
 以下约束对每个任务隐式生效（逐字复制自 spec §7 与本仓库已确立裁决）：
 
-1. **模块依赖**：module-report 依赖 module-common/module-scan/module-result/module-checklist（现状）；跨模块只 import 接口/值类型/枚举，**绝不 import `@Entity`**（P2-D5）。`VersionStatus` 直接从 `com.example.compliance.checklist.domain.enums.VersionStatus` 复用（module-report 已依赖 module-checklist，无需迁移）。
+1. **模块依赖**：module-report 依赖 module-common/module-scan/module-result/module-checklist（现状）；跨模块只 import 接口/值类型/枚举，**绝不 import `@Entity`**（P2-D5）。`VersionStatus` 直接从 `com.example.compliance.checklist.domain.VersionStatus` 复用（module-report 已依赖 module-checklist，无需迁移）。
 2. **模块内分层**：api/application/domain/infrastructure；Controller 不写业务逻辑、不返回 Entity。
 3. **统一 API**：响应 `{code:0,message:"success",data}`；分页 `{items,page,size,total}`（`PageResponse`，module-common）；路径 `/api/v1/reports/...`。
 4. **表约定**：业务表含 `id/created_at/updated_at`（`BaseEntity`）；`audit_log` 只增不改不删；**Ruling #34**：`audit_log.detail` 是 JSONB，detail 必须传合法 JSON 字符串。
@@ -63,7 +63,7 @@
 - Test: `app-server/src/test/kotlin/com/example/compliance/report/ReportRepositoryIntegrationTest.kt`
 
 **Interfaces:**
-- Consumes: `BaseEntity`（module-common，id/createdAt/updatedAt）；`VersionStatus`（module-checklist.domain.enums）；`@JdbcTypeCode`（org.hibernate.annotations / SqlTypes）。
+- Consumes: `BaseEntity`（module-common，id/createdAt/updatedAt）；`VersionStatus`（module-checklist.domain）；`@JdbcTypeCode`（org.hibernate.annotations / SqlTypes）。
 - Produces: `ReportTemplate`（templateType/name/description/version）、`ReportTemplateVersion`（templateId/versionNo:Int/status/sections:String/jsonb/createdBy/version）、`ReportSnapshot`（templateId/templateVersionNo/projectId?/scanTaskId?/checklistVersionId?/snapshotType/payload:String/jsonb/generatedBy?/generatedAt）；仓储方法签名（Task 12.2/12.3 消费）。
 
 - [ ] **Step 1: 写失败测试**（`ReportRepositoryIntegrationTest.kt`）
@@ -72,7 +72,7 @@
 package com.example.compliance.report
 
 import com.example.compliance.AbstractIntegrationTest
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.domain.ReportTemplate
 import com.example.compliance.report.domain.ReportTemplateVersion
@@ -229,7 +229,7 @@ class ReportTemplate : BaseEntity() {
 ```kotlin
 package com.example.compliance.report.domain
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.common.domain.BaseEntity
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
@@ -321,7 +321,7 @@ interface ReportTemplateRepository : JpaRepository<ReportTemplate, Long> {
 ```kotlin
 package com.example.compliance.report.infrastructure
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.report.domain.ReportTemplateVersion
 import org.springframework.data.jpa.repository.JpaRepository
 
@@ -385,7 +385,7 @@ git commit -m "feat(report): report template/snapshot data layer with V13 migrat
 ```kotlin
 package com.example.compliance.report.application
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.common.audit.AuditService
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportTemplate
@@ -525,7 +525,7 @@ Expected: FAIL（编译失败，ReportTemplateService 不存在）。
 ```kotlin
 package com.example.compliance.report.application
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.common.audit.AuditService
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportTemplate
@@ -722,7 +722,7 @@ dependencies {
 ```kotlin
 package com.example.compliance.report.api
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.report.api.dto.DraftRequest
 import com.example.compliance.report.application.ReportTemplateService
 import com.example.compliance.report.domain.ReportTemplateVersion
@@ -843,7 +843,7 @@ git commit -m "feat(report): versioned report template management (draft/publish
 ```kotlin
 package com.example.compliance.report.application
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.domain.ReportTemplate
@@ -1044,7 +1044,7 @@ data class ComplianceSummary(
 ```kotlin
 package com.example.compliance.report.application
 
-import com.example.compliance.checklist.domain.enums.VersionStatus
+import com.example.compliance.checklist.domain.VersionStatus
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.infrastructure.ReportSnapshotRepository
