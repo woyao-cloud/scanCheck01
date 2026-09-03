@@ -34,9 +34,14 @@ class ChecklistService(
         if (standardRepository.existsByCode(code)) {
             throw BusinessException(400, "standard code already exists: $code")
         }
-        return standardRepository.save(ComplianceStandard().apply {
+        val saved = standardRepository.save(ComplianceStandard().apply {
             this.code = code; this.name = name; this.description = description
         })
+        auditService.record(
+            "CHECKLIST_CREATED", "checklist", 1L, "checklist_version",
+            saved.id, """{"type":"standard","code":"$code","name":"$name"}""",
+        )
+        return saved
     }
 
     @Transactional
@@ -50,16 +55,20 @@ class ChecklistService(
         val checklist = checklistRepository.save(ComplianceChecklist().apply {
             this.standardId = standardId; this.code = code; this.name = name
         })
-        versionRepository.save(ChecklistVersion().apply {
+        val version = versionRepository.save(ChecklistVersion().apply {
             checklistId = checklist.id!!; versionNo = "V1"; status = VersionStatus.DRAFT
         })
+        auditService.record(
+            "CHECKLIST_CREATED", "checklist", 1L, "checklist_version",
+            version.id, """{"type":"checklist","code":"$code","name":"$name","versionNo":"${version.versionNo}"}""",
+        )
         return checklist
     }
 
     @Transactional
     fun addItem(checklistId: Long, command: AddItemCommand): ChecklistItem {
         val version = currentDraftOrNew(checklistId)
-        return itemRepository.save(ChecklistItem().apply {
+        val saved = itemRepository.save(ChecklistItem().apply {
             versionId = version.id!!
             itemCode = command.itemCode
             name = command.name
@@ -72,6 +81,11 @@ class ChecklistService(
             waivable = command.waivable
             scoreWeight = command.scoreWeight
         })
+        auditService.record(
+            "CHECKLIST_ITEM_ADDED", "checklist", 1L, "checklist_version",
+            version.id!!, """{"itemCode":"${saved.itemCode}","versionId":${version.id!!}}""",
+        )
+        return saved
     }
 
     /** 返回当前 DRAFT 版本；若最新已是 PUBLISHED 则新建下一个版本号（版本化编辑）。 */
@@ -100,8 +114,9 @@ class ChecklistService(
         version.publishedAt = Instant.now()
         val saved = versionRepository.save(version)
         auditService.record(
-            "CHECKLIST_PUBLISH", "checklist", null, "checklist_version",
-            saved.id, """{"checklist":$checklistId,"version":"${saved.versionNo}"}""", null,
+            "CHECKLIST_PUBLISHED", "checklist", 1L, "checklist_version",
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
+            saved.id, """{"checklist":$checklistId,"version":"${saved.versionNo}"}""",
         )
         return saved
     }
@@ -117,8 +132,8 @@ class ChecklistService(
             this.projectId = projectId; this.checklistVersionId = checklistVersionId
         })
         auditService.record(
-            "CHECKLIST_BIND", "checklist", null, "project",
-            projectId, """{"checklistVersion":$checklistVersionId}""", null,
+            "CHECKLIST_BIND", "checklist", 1L, "project",
+            projectId, """{"checklistVersion":$checklistVersionId}""",
         )
         return binding
     }

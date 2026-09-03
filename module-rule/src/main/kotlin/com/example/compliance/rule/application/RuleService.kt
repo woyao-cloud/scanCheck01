@@ -27,13 +27,18 @@ class RuleService(
         if (ruleRepository.existsByRuleCode(command.ruleCode)) {
             throw BusinessException(400, "rule code already exists: ${command.ruleCode}")
         }
-        return ruleRepository.save(RuleDefinition().apply {
+        val saved = ruleRepository.save(RuleDefinition().apply {
             ruleCode = command.ruleCode
             name = command.name
             riskLevel = command.riskLevel
             description = command.description
             status = RuleStatus.DRAFT
         })
+        auditService.record(
+            "RULE_CREATED", "rule", 1L, "rule",
+            saved.id, """{"ruleCode":"${saved.ruleCode}","riskLevel":"${saved.riskLevel}"}""",
+        )
+        return saved
     }
 
     private fun require(ruleId: Long): RuleDefinition =
@@ -42,21 +47,31 @@ class RuleService(
     @Transactional
     fun addEngineBinding(ruleId: Long, command: AddEngineBindingCommand): RuleEngineBinding {
         require(ruleId)
-        return bindingRepository.save(RuleEngineBinding().apply {
+        val saved = bindingRepository.save(RuleEngineBinding().apply {
             this.ruleId = ruleId
             engine = command.engine
             engineRuleId = command.engineRuleId
             engineConfigJson = command.engineConfigJson
         })
+        auditService.record(
+            "RULE_ENGINE_BIND", "rule", 1L, "rule",
+            saved.id, """{"ruleId":$ruleId,"engine":"${saved.engine}"}""",
+        )
+        return saved
     }
 
     @Transactional
     fun addComplianceMapping(ruleId: Long, checklistItemCode: String): RuleComplianceMapping {
         require(ruleId)
-        return mappingRepository.save(RuleComplianceMapping().apply {
+        val saved = mappingRepository.save(RuleComplianceMapping().apply {
             this.ruleId = ruleId
             this.checklistItemCode = checklistItemCode
         })
+        auditService.record(
+            "RULE_MAPPING", "rule", 1L, "rule",
+            saved.id, """{"ruleId":$ruleId,"checklistItemCode":"$checklistItemCode"}""",
+        )
+        return saved
     }
 
     @Transactional
@@ -69,7 +84,12 @@ class RuleService(
         policy.resultOnMatch = command.resultOnMatch
         policy.policyJson = command.policyJson
         policy.spElExpression = command.spElExpression
-        return policyRepository.save(policy)
+        val saved = policyRepository.save(policy)
+        auditService.record(
+            "RULE_POLICY_SET", "rule", 1L, "rule",
+            saved.id, """{"ruleId":$ruleId,"resultOnMatch":"${saved.resultOnMatch}"}""",
+        )
+        return saved
     }
 
     fun list(): List<RuleDefinition> = ruleRepository.findAll()
@@ -83,7 +103,12 @@ class RuleService(
         command.name?.let { rule.name = it }
         command.riskLevel?.let { rule.riskLevel = it }
         command.description?.let { rule.description = it }
-        return ruleRepository.save(rule)
+        val saved = ruleRepository.save(rule)
+        auditService.record(
+            "RULE_UPDATED", "rule", 1L, "rule",
+            saved.id, """{"ruleCode":"${saved.ruleCode}"}""",
+        )
+        return saved
     }
 
     @Transactional
@@ -95,10 +120,9 @@ class RuleService(
         rule.status = RuleStatus.PUBLISHED
         val saved = ruleRepository.save(rule)
         auditService.record(
-            "RULE_PUBLISH", "rule", null, "rule_definition",
-            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — plain-text detail fails INSERT with
-            // "invalid input syntax for type json" → 500. Same defect as Task 3.2's publish/bindProject.
-            saved.id, """{"rule":"${saved.ruleCode}"}""", null,
+            "RULE_PUBLISHED", "rule", 1L, "rule",
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
+            saved.id, """{"rule":"${saved.ruleCode}"}""",
         )
         return saved
     }
@@ -109,10 +133,9 @@ class RuleService(
         rule.status = RuleStatus.DISABLED
         val saved = ruleRepository.save(rule)
         auditService.record(
-            "RULE_DISABLE", "rule", null, "rule_definition",
-            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — plain-text detail fails INSERT with
-            // "invalid input syntax for type json" → 500. Same defect as Task 3.2's publish/bindProject.
-            saved.id, """{"rule":"${saved.ruleCode}"}""", null,
+            "RULE_DISABLE", "rule", 1L, "rule_definition",
+            // Ruling #34: audit_log.detail is JSONB (V1 DDL) — detail must be valid JSON.
+            saved.id, """{"rule":"${saved.ruleCode}"}""",
         )
         return saved
     }
