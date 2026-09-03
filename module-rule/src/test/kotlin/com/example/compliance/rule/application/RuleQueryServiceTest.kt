@@ -41,4 +41,27 @@ class RuleQueryServiceTest {
         assertNull(service.publishedRuleByEngineRuleId("SEMGREP", "no-such"))
         verify(exactly = 0) { ruleRepository.findAll() }
     }
+
+    // M10 清理①：findByRuleCode 原为 findAll().firstOrNull{} 内存过滤（每扫描逐调用 O(N)）。
+    // 改委托派生查询后：严格 mock 下若实现误调 findAll 会直接抛（未 stub）。
+    @Test
+    fun `findByRuleCode delegates to JPQL and never scans all rules`() {
+        every { ruleRepository.findFirstByRuleCodeAndStatus("R1", RuleStatus.PUBLISHED) } returns published("R1")
+        val result = service.findByRuleCode("R1")
+        assertEquals("R1", result?.ruleCode)
+        verify(exactly = 0) { ruleRepository.findAll() }
+        verify(exactly = 1) { ruleRepository.findFirstByRuleCodeAndStatus("R1", RuleStatus.PUBLISHED) }
+    }
+
+    @Test
+    fun `findByRuleCode returns null when no published rule matches`() {
+        every { ruleRepository.findFirstByRuleCodeAndStatus("R1", RuleStatus.PUBLISHED) } returns null
+
+        assertNull(service.findByRuleCode("R1"))
+        verify(exactly = 0) { ruleRepository.findAll() }
+    }
+
+    private fun published(ruleCode: String) = RuleDefinition().apply {
+        this.ruleCode = ruleCode; status = RuleStatus.PUBLISHED
+    }
 }

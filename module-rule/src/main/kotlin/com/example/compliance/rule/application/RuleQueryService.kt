@@ -26,9 +26,7 @@ class RuleQueryService(
     fun itemCodesByRuleId(ruleId: Long): List<String> =
         mappingRepository.findByRuleId(ruleId).map { it.checklistItemCode }
 
-    /** 按平台规则号查已发布规则（module-scan 合规判定使用）。 */
+    /** 按平台规则号查已发布规则（module-scan 合规判定使用）。M10 清理①：委托派生查询，去除 findAll 内存过滤。 */
     fun findByRuleCode(ruleCode: String): RuleDefinition? =
-        ruleRepository.findAll().firstOrNull {
-            it.ruleCode == ruleCode && it.status == com.example.compliance.rule.domain.RuleStatus.PUBLISHED
-        }
+        ruleRepository.findFirstByRuleCodeAndStatus(ruleCode, RuleStatus.PUBLISHED)
 }

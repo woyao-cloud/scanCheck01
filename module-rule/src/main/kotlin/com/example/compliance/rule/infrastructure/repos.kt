@@ -40,6 +40,10 @@ interface RuleDefinitionRepository : JpaRepository<RuleDefinition, Long> {
         """
     )
     fun findFirstByEngineAndEngineRuleIdAndStatus(engine: String, engineRuleId: String, status: RuleStatus): RuleDefinition?
+
+    // M10 清理①：findByRuleCode 原为 findAll().firstOrNull{} 内存过滤（每扫描逐调用 O(N)）。
+    // 派生查询 order by id limit 1 —— 保留 firstOrNull 语义（ruleCode 非唯一取最小 id）。
+    fun findFirstByRuleCodeAndStatus(ruleCode: String, status: RuleStatus): RuleDefinition?
 }
 
 interface RuleEngineBindingRepository : JpaRepository<RuleEngineBinding, Long> {
