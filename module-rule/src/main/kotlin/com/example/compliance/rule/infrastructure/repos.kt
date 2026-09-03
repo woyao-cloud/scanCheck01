@@ -26,6 +26,20 @@ interface RuleDefinitionRepository : JpaRepository<RuleDefinition, Long> {
     )
     fun findFirstByStatusAndEngineRuleId(status: RuleStatus, engineRuleId: String): RuleDefinition?
     fun findByStatus(status: RuleStatus): List<RuleDefinition>
+
+    // F7 (spec §6.5)：单条 JPQL 连接 binding —— 引擎 + 引擎规则号 + 已发布规则。
+    // RuleQueryService.publishedRuleByEngineRuleId 原为 findAll().filter{} 内存过滤（每扫描逐 finding 调用，
+    // 绑定多时 O(N²)）；此查询按 Hibernate 6 HQL 语义 order by + limit 1（同 findFirstByStatusAndEngineRuleId 模式）。
+    @Query(
+        """
+        select r from RuleDefinition r
+        join RuleEngineBinding b on b.ruleId = r.id
+        where r.status = :status and b.engine = :engine and b.engineRuleId = :engineRuleId
+        order by r.id
+        limit 1
+        """
+    )
+    fun findFirstByEngineAndEngineRuleIdAndStatus(engine: String, engineRuleId: String, status: RuleStatus): RuleDefinition?
 }
 
 interface RuleEngineBindingRepository : JpaRepository<RuleEngineBinding, Long> {

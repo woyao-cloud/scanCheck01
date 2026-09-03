@@ -6,7 +6,6 @@ import com.example.compliance.result.domain.FindingEvidence
 import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.domain.FindingStatusSnapshot
 import com.example.compliance.result.infrastructure.FindingEvidenceRepository
-import com.example.compliance.result.infrastructure.FindingHistoryRepository
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingStatusSnapshotRepository
 import io.mockk.every
@@ -19,11 +18,10 @@ import kotlin.test.assertSame
 class FindingLifecycleServiceTest {
 
     private val findingRepository = mockk<FindingRepository>()
-    private val historyRepository = mockk<FindingHistoryRepository>()
     private val statusRepository = mockk<FindingStatusSnapshotRepository>()
     private val evidenceRepository = mockk<FindingEvidenceRepository>()
     private val auditService = mockk<AuditService>(relaxed = true)
-    private val service = FindingLifecycleService(findingRepository, historyRepository, statusRepository, evidenceRepository, auditService)
+    private val service = FindingLifecycleService(findingRepository, statusRepository, evidenceRepository, auditService)
 
     @Test
     fun `transition writes snapshot and audit and updates finding status`() {

@@ -7,7 +7,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/compliance
     username: compliance
-    password: compliance
+    # F6 (spec §6.5)：敏感项经环境变量注入，默认值仅限非敏感占位（生产必须显式设置）
+    password: "${DB_PASSWORD:compliance}"
   jpa:
     hibernate:
       ddl-auto: validate
@@ -23,14 +24,16 @@ spring:
 
 app:
   jwt:
-    secret: "change-me-please-use-a-64-char-random-secret-for-hmac-sha-256"
+    # F6 (spec §6.5)：JWT 签名密钥经 APP_JWT_SECRET 注入，默认值仅限非敏感占位（生产必须显式设置）
+    secret: "${APP_JWT_SECRET:change-me-please-use-a-64-char-random-secret-for-hmac-sha-256}"
     expiration-minutes: 120
   semgrep:
     command: semgrep
     working-dir: /tmp/compliance-scan
     timeout-seconds: 300
   credential:
-    secret: "0123456789abcdef0123456789abcdef"   # 生产环境改由环境变量注入
+    # F6 (spec §6.5)：凭据加密密钥经 APP_CREDENTIAL_SECRET 注入，默认值仅限非敏感占位
+    secret: "${APP_CREDENTIAL_SECRET:0123456789abcdef0123456789abcdef}"
   scan:
     checkout-engines: SEMGREP   # 仅这些引擎在编排器侧触发 GitCheckout；STUB 等跳过（Task 8.4 消费）
 

@@ -6,17 +6,16 @@ import com.example.compliance.result.domain.FindingEvidence
 import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.domain.FindingStatusSnapshot
 import com.example.compliance.result.infrastructure.FindingEvidenceRepository
-import com.example.compliance.result.infrastructure.FindingHistoryRepository
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingStatusSnapshotRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
-/** finding 生命周期唯一权威：所有状态转移、复扫验证、证据写入都经过这里（P2-D4）。 */
+/** finding 生命周期唯一权威：所有状态转移、复扫验证、证据写入都经过这里（P2-D4）。
+ *  F8 (final review m7)：移除注入但从未使用的 historyRepository（死依赖）。 */
 @Service
 class FindingLifecycleService(
     private val findingRepository: FindingRepository,
-    private val historyRepository: FindingHistoryRepository,
     private val statusRepository: FindingStatusSnapshotRepository,
     private val evidenceRepository: FindingEvidenceRepository,
     private val auditService: AuditService,
