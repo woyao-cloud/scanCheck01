@@ -39,6 +39,9 @@ class ApiTokenService(
     fun verify(rawToken: String): ApiToken? {
         if (!rawToken.startsWith(TOKEN_PREFIX)) return null
         val body = rawToken.removePrefix(TOKEN_PREFIX)
+        // Guard: undersized malformed tokens (e.g. "cop-abc") would make dropLast(33) throw
+        // IllegalArgumentException → 500. Treat them as invalid instead (R-9.2-c).
+        if (body.length < TOKEN_RANDOM_CHARS + 1) return null
         val name = body.dropLast(TOKEN_RANDOM_CHARS + 1)
         val candidates = repository.findByNameAndStatus(name, "ACTIVE")
         val now = Instant.now()

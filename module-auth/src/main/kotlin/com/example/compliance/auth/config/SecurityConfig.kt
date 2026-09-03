@@ -37,8 +37,10 @@ class SecurityConfig(
                     "/swagger-ui/**",
                     "/swagger-ui.html",
                     "/actuator/health",
+                    "/api/v1/openapi/scans",
                 ).permitAll()
                 auth.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                auth.requestMatchers("/api/v1/openapi/tokens/**").hasRole("ADMIN")
                 auth.anyRequest().authenticated()
             }
             .addFilterBefore(
