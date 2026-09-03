@@ -59,6 +59,74 @@ class RemediationService(
         }.filterNotNull()
     }
 
+    /** 人工确认问题真实存在：NEW → CONFIRMED。 */
+    @Transactional
+    fun confirm(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.NEW) {
+            throw BusinessException(409, "finding not in NEW state: $findingId")
+        }
+        lifecyclePort.transition(findingId, FindingStatus.CONFIRMED, "confirmed", actorId)
+        return get(findingId)
+    }
+
+    /** 开始整改：ASSIGNED → FIXING。 */
+    @Transactional
+    fun startFix(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.ASSIGNED) {
+            throw BusinessException(409, "finding not in ASSIGNED state: $findingId")
+        }
+        return mirrorTransition(findingId, FindingStatus.FIXING, "fix_started", actorId)
+    }
+
+    /** 标记修复：FIXING → FIXED，必附 evidence。 */
+    @Transactional
+    fun markFixed(findingId: Long, actorId: Long, evidenceType: String, evidenceRef: String): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "evidence required for fixed")
+        }
+        if (finding.status != FindingStatus.FIXING) {
+            throw BusinessException(409, "finding not in FIXING state: $findingId")
+        }
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return mirrorTransition(findingId, FindingStatus.FIXED, "fixed", actorId)
+    }
+
+    /** 追加证据（无转移）。 */
+    @Transactional
+    fun addEvidence(findingId: Long, actorId: Long, evidenceType: String, evidenceRef: String): FindingRemediationView {
+        mustGetFinding(findingId)
+        if (evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "evidence required")
+        }
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return get(findingId)
+    }
+
+    /** GET /findings：按项目/状态/严重级过滤 + 分页（内存分页，spec §4.4）。 */
+    @Transactional(readOnly = true)
+    fun list(projectId: Long?, status: FindingStatus?, severity: String?, page: Int, size: Int): List<FindingRemediationView> {
+        val findings = lifecyclePort.findingsByProject(projectId ?: 0L, status)
+            .filter { severity == null || it.severity.equals(severity, ignoreCase = true) }
+        val tasks = taskRepository.findByProjectId(projectId ?: 0L).associateBy { it.findingId }
+        val views = findings.map { f -> FindingRemediationView(f, tasks[f.id]?.toView()) }
+        val from = (page.coerceAtLeast(0)) * size.coerceAtLeast(1)
+        return if (from >= views.size) emptyList() else views.subList(from, minOf(from + size, views.size))
+    }
+
+    /** 状态转移 + task.status 镜像（P2-D4）。 */
+    private fun mirrorTransition(findingId: Long, to: FindingStatus, reason: String, actorId: Long): FindingRemediationView {
+        val status = lifecyclePort.transition(findingId, to, reason, actorId)
+        val task = taskRepository.findByFindingId(findingId)
+        if (task != null) {
+            task.status = status
+            taskRepository.save(task)
+        }
+        return get(findingId)
+    }
+
     protected fun mustGetFinding(findingId: Long): FindingView =
         lifecyclePort.findById(findingId)
             ?: throw BusinessException(404, "finding not found: $findingId")

@@ -62,4 +62,40 @@ class RemediationServiceTest {
         assertNull(result.task)
         assertEquals(FindingStatus.NEW, result.finding.status)
     }
+
+    @Test
+    fun `confirm requires NEW`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.CONFIRMED)
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.confirm(7L, 9L)
+        }
+        assertEquals("finding not in NEW state: 7", ex.message)
+    }
+
+    @Test
+    fun `fixed requires evidence and transitions from fixing`() {
+        every { lifecyclePort.findById(7L) } returnsMany listOf(
+            view(FindingStatus.FIXING),   // markFixed 守卫读
+            view(FindingStatus.FIXED),    // mirrorTransition 内 get 重读
+        )
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply { id = 11L; findingId = 7L; createdAt = Instant.now() }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) } returns
+            com.example.compliance.result.application.EvidenceView(1L, 7L, "FIX_COMMIT", "deadbeef", 9L, java.time.Instant.EPOCH)
+        every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
+
+        val result = service.markFixed(7L, 9L, "FIX_COMMIT", "deadbeef")
+
+        assertEquals(FindingStatus.FIXED, result.finding.status)
+        verify { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) }
+    }
+
+    @Test
+    fun `fixed without evidence is rejected`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXING)
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.markFixed(7L, 9L, "", "")
+        }
+        assertEquals("evidence required for fixed", ex.message)
+    }
 }
