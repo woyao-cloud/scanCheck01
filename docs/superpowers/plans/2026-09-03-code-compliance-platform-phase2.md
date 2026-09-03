@@ -438,11 +438,11 @@ git commit -m "feat(result): finding lifecycle entities and occurrence query (pr
 - Consumes: Task 6.2 实体/仓储；`AuditService`（module-common，包 `com.example.compliance.common.audit.AuditService`，PF-9 真实签名）：`fun record(action: String, module: String, userId: Long? = null, resourceType: String? = null, resourceId: Long? = null, detail: String? = null, ip: String? = null)`（`@Transactional(REQUIRES_NEW)`）。
 - Produces: `FindingLifecyclePort` 接口（module-remediation 在 M7 依赖它）：
   - `fun transition(findingId: Long, to: FindingStatus, reason: String?, changedBy: Long?): FindingStatus`
-  - `fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): FindingEvidence`
+  - `fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): EvidenceView`（R-6.3-c：返回值 DTO，不泄漏实体）
   - `fun findingsForScanTask(scanTaskId: Long): List<FindingView>`
   - `fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>`
   - `fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult`
-- Produces: `data class FindingView(id, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber, firstSeenAt, lastSeenAt, occurrenceCount, engine: String = "")`（engine 尾字段=发现引擎，M7/M8 消费）、`data class VerifyResult(closed: Int, regressed: Int)`（module-result.application）。
+- Produces: `data class FindingView(id, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber, firstSeenAt, lastSeenAt, occurrenceCount, engine: String = "")`（engine 尾字段=发现引擎，M7/M8 消费）、`data class VerifyResult(closed: Int, regressed: Int)`、`data class EvidenceView(id, findingId, evidenceType, evidenceRef, addedBy, addedAt)`（R-6.3-c，module-result.application）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -551,10 +551,20 @@ data class FindingView(
 
 data class VerifyResult(val closed: Int, val regressed: Int)
 
+/** 证据 DTO（R-6.3-c：端口不泄漏实体，P2-D5）。 */
+data class EvidenceView(
+    val id: Long,
+    val findingId: Long,
+    val evidenceType: String,
+    val evidenceRef: String,
+    val addedBy: Long?,
+    val addedAt: java.time.Instant,
+)
+
 /** finding 生命周期权威端口。实现：module-result 的 FindingLifecycleService。 */
 interface FindingLifecyclePort {
     fun transition(findingId: Long, to: FindingStatus, reason: String?, changedBy: Long?): FindingStatus
-    fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): FindingEvidence
+    fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): EvidenceView
     fun findingsForScanTask(scanTaskId: Long): List<FindingView>
     fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>
     fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult
@@ -612,12 +622,12 @@ class FindingLifecycleService(
     }
 
     @Transactional
-    override fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): FindingEvidence {
+    override fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): EvidenceView {
         val saved = evidenceRepository.save(FindingEvidence().apply {
             this.findingId = findingId; this.evidenceType = evidenceType; this.evidenceRef = evidenceRef; this.addedBy = changedBy
         })
         auditService.record("FINDING_EVIDENCE", "result", changedBy, "finding", findingId, "{\"type\":\"$evidenceType\",\"ref\":${quote(evidenceRef)}}")
-        return saved
+        return EvidenceView(saved.id!!, saved.findingId, saved.evidenceType, saved.evidenceRef, saved.addedBy, saved.addedAt)
     }
 
     /** 复扫验证：扫描完成后调用。处于 RECHECKING 的 finding —— 本次扫描缺席 → CLOSED；命中 → 回归 CONFIRMED。 */
