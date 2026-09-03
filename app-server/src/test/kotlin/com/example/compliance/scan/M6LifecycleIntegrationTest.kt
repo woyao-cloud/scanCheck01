@@ -10,7 +10,7 @@ import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.engine.RawFinding
 import com.example.compliance.result.engine.ScanContext
 import com.example.compliance.result.engine.ScanEngineAdapter
-import com.example.compliance.result.engine.ScanResult
+import com.example.compliance.result.engine.ScanExecutionResult
 import com.example.compliance.rule.application.AddEngineBindingCommand
 import com.example.compliance.rule.application.CreateRuleCommand
 import com.example.compliance.rule.application.RuleService
@@ -33,9 +33,11 @@ class M6LifecycleIntegrationTest : AbstractIntegrationTest() {
         @Bean
         fun stubM6Adapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUBM6"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(
-                findings = listOf(RawFinding("stub-m6-rule", "M6", "src/main/java/M6.java", 10, "HIGH", "m", "x=id;"))
-            )
+            // M8 新契约：编排器直接驱动五阶段，STUB 按五方法形态接入（Ruling：测试 STUB 适配器按新契约更新）
+            override fun executeScan(context: ScanContext): ScanExecutionResult =
+                ScanExecutionResult(success = true, durationMs = 5)
+            override fun collectResult(context: ScanContext): List<RawFinding> =
+                listOf(RawFinding("stub-m6-rule", "M6", "src/main/java/M6.java", 10, "HIGH", "m", "x=id;"))
         }
     }
 
@@ -87,7 +89,7 @@ class M6LifecycleIntegrationTest : AbstractIntegrationTest() {
         var done = false
         repeat(50) {
             val s = scanTaskService.get(taskId).status
-            if (s != ScanTaskStatus.RUNNING && s != ScanTaskStatus.PENDING) { done = true; return@repeat }
+            if (s != ScanTaskStatus.RUNNING && s != ScanTaskStatus.PENDING && s != ScanTaskStatus.PREPARING) { done = true; return@repeat }
             Thread.sleep(200)
         }
         assertTrue(done, "scan $taskId should finish within timeout")

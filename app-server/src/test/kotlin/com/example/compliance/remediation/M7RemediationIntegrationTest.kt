@@ -11,7 +11,7 @@ import com.example.compliance.result.domain.FindingStatus
 import com.example.compliance.result.engine.RawFinding
 import com.example.compliance.result.engine.ScanContext
 import com.example.compliance.result.engine.ScanEngineAdapter
-import com.example.compliance.result.engine.ScanResult
+import com.example.compliance.result.engine.ScanExecutionResult
 import com.example.compliance.rule.application.AddEngineBindingCommand
 import com.example.compliance.rule.application.CreateRuleCommand
 import com.example.compliance.rule.application.RuleService
@@ -28,7 +28,7 @@ import kotlin.test.assertTrue
 
 /** M7 复扫闭环（spec §4.3）：FIXED → recheck → 复扫 absent→CLOSED / present→回归 CONFIRMED。
  *  数据前缀 REM-*；STUBM7 用静态 StubM7.findings 控制复扫命中/缺席。
- *  scan() 兼容形态：Task 8.1 将 scan() 改为默认方法，本 override 前后均可编译（Ruling：STUB 解冻细化）。 */
+ *  五方法形态：M8 编排器直接驱动 prepare/execute/collect/normalize，本 STUB 按新契约接入（Ruling：STUB 解冻细化）。 */
 class M7RemediationIntegrationTest : AbstractIntegrationTest() {
 
     /** 静态可控引擎输出：测试在 requestRecheck 前改写，决定复扫是否命中。 */
@@ -42,7 +42,10 @@ class M7RemediationIntegrationTest : AbstractIntegrationTest() {
         @Bean
         fun stubM7Adapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUBM7"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(findings = StubM7.findings)
+            // M8 新契约：编排器直接驱动五阶段，STUB 按五方法形态接入（Ruling：测试 STUB 适配器按新契约更新）
+            override fun executeScan(context: ScanContext): ScanExecutionResult =
+                ScanExecutionResult(success = true, durationMs = 5)
+            override fun collectResult(context: ScanContext): List<RawFinding> = StubM7.findings
         }
     }
 
@@ -133,7 +136,7 @@ class M7RemediationIntegrationTest : AbstractIntegrationTest() {
         var done = false
         repeat(50) {
             val s = scanTaskService.get(taskId).status
-            if (s != ScanTaskStatus.RUNNING && s != ScanTaskStatus.PENDING) { done = true; return@repeat }
+            if (s != ScanTaskStatus.RUNNING && s != ScanTaskStatus.PENDING && s != ScanTaskStatus.PREPARING) { done = true; return@repeat }
             Thread.sleep(200)
         }
         assertTrue(done, "scan $taskId should finish within timeout")

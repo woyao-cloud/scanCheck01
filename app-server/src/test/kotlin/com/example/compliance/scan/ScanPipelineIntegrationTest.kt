@@ -8,7 +8,7 @@ import com.example.compliance.project.application.ProjectService
 import com.example.compliance.result.engine.RawFinding
 import com.example.compliance.result.engine.ScanContext
 import com.example.compliance.result.engine.ScanEngineAdapter
-import com.example.compliance.result.engine.ScanResult
+import com.example.compliance.result.engine.ScanExecutionResult
 import com.example.compliance.rule.application.AddEngineBindingCommand
 import com.example.compliance.rule.application.CreateRuleCommand
 import com.example.compliance.rule.application.RuleService
@@ -27,10 +27,11 @@ class ScanPipelineIntegrationTest : AbstractIntegrationTest() {
         @Bean
         fun stubAdapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUB"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(
-                findings = listOf(
-                    RawFinding("stub-rule-sqli", "Stub SQLi", "src/main/java/Demo.java", 10, "HIGH", "inject", "x = id;"),
-                )
+            // M8 新契约：编排器直接驱动五阶段，STUB 按五方法形态接入（Ruling：测试 STUB 适配器按新契约更新）
+            override fun executeScan(context: ScanContext): ScanExecutionResult =
+                ScanExecutionResult(success = true, durationMs = 5)
+            override fun collectResult(context: ScanContext): List<RawFinding> = listOf(
+                RawFinding("stub-rule-sqli", "Stub SQLi", "src/main/java/Demo.java", 10, "HIGH", "inject", "x = id;"),
             )
         }
     }
@@ -66,7 +67,8 @@ class ScanPipelineIntegrationTest : AbstractIntegrationTest() {
         var done = false
         repeat(50) {
             if (scanTaskService.get(task.id!!).status != ScanTaskStatus.RUNNING &&
-                scanTaskService.get(task.id!!).status != ScanTaskStatus.PENDING
+                scanTaskService.get(task.id!!).status != ScanTaskStatus.PENDING &&
+                scanTaskService.get(task.id!!).status != ScanTaskStatus.PREPARING
             ) { done = true; return@repeat }
             Thread.sleep(200)
         }

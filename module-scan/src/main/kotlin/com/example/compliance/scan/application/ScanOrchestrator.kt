@@ -7,8 +7,10 @@ import com.example.compliance.result.application.FindingService
 import com.example.compliance.result.application.NewFinding
 import com.example.compliance.result.engine.EngineAdapterRegistry
 import com.example.compliance.result.engine.ScanContext
+import com.example.compliance.result.engine.ScanEngineAdapter
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.rule.application.RuleQueryService
+import com.example.compliance.scan.checkout.GitCheckout
 import com.example.compliance.scan.domain.ComplianceEvaluation
 import com.example.compliance.scan.domain.ChecklistItemResult
 import com.example.compliance.scan.domain.ScanExecutionLog
@@ -21,6 +23,7 @@ import com.example.compliance.scan.infrastructure.ScanExecutionLogRepository
 import com.example.compliance.scan.infrastructure.ScanJobRepository
 import com.example.compliance.scan.infrastructure.ScanTaskRepository
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -43,10 +46,12 @@ class ScanOrchestrator(
     private val complianceEvaluator: ComplianceEvaluator,
     private val checklistQueryService: com.example.compliance.checklist.application.ChecklistQueryService,
     private val lifecycleService: com.example.compliance.result.application.FindingLifecycleService,
+    private val gitCheckout: GitCheckout,
+    @Value("\${app.scan.checkout-engines:}") private val checkoutEngines: Set<String>,
 ) {
     private val objectMapper = ObjectMapper()
 
-    /** 全流水线：RUNNING → adapter 扫描 → 归一化 → 指纹去重入库 → 合规判定 → 汇总评估。 */
+    /** 全流水线：PREPARING → 门控检出 → RUNNING → 五阶段扫描 → 归一化 → 指纹去重入库 → 合规判定 → 汇总评估（cleanup 在 finally）。 */
     // Ruling #52: 刻意不加 @Transactional（同 Ruling #45）—— 每个 repo save 自带事务立即提交，
     // catch 里的 FAILED 写入必然落库。若加外层 @Transactional，来自事务性协作方（如
     // FindingService.upsertByFingerprint）的异常会把共享事务标记 rollback-only，commit 时报
@@ -55,40 +60,58 @@ class ScanOrchestrator(
     fun executeAsync(scanTaskId: Long) {
         val task = scanTaskRepository.findById(scanTaskId)
             .orElseThrow { BusinessException(404, "scan task not found: $scanTaskId") }
-        task.status = ScanTaskStatus.RUNNING
+        task.status = ScanTaskStatus.PREPARING        // spec §5.3
         task.startedAt = Instant.now()
         scanTaskRepository.save(task)
-        log(scanTaskId, "SCAN", "INFO", "start engine=${task.engine} project=${task.projectId}")
+        log(scanTaskId, "PREPARE", "INFO", "start engine=${task.engine} project=${task.projectId}")
+        var adapter: ScanEngineAdapter? = null
+        var context: ScanContext? = null
+        var checkoutDir: String? = null
+        val start = System.currentTimeMillis()
         try {
             val repo = repoRepository.findByProjectId(task.projectId).firstOrNull()
                 ?: throw BusinessException(400, "project has no repository bound")
-            val adapter = registry.get(task.engine)
+            val resolvedAdapter = registry.get(task.engine)
                 ?: throw BusinessException(400, "unsupported engine: ${task.engine}")
+            adapter = resolvedAdapter
             val version = checklistQueryService.publishedVersionForProject(task.projectId)
             task.checklistVersionId = version?.id
             log(scanTaskId, "PREPARE", "INFO", "checklistVersionId=${version?.id ?: "none"}")
-            val context = ScanContext(task.id!!, task.projectId, repo.gitUrl, task.ref)
-            val start = System.currentTimeMillis()
-            val result = adapter.scan(context)
-            val duration = System.currentTimeMillis() - start
+            // 门控检出（spec §5.2）：仅 checkout-engines 中的引擎触发 clone；STUB 等跳过（commitId 保持 null）
+            val checkout = if (task.engine.uppercase() in checkoutEngines) {
+                gitCheckout.checkout(repo.gitUrl, task.ref).also { checkoutDir = it.workDir }
+            } else null
+            context = ScanContext(
+                scanTaskId = task.id!!, projectId = task.projectId, repoUrl = repo.gitUrl,
+                ref = task.ref, workDir = checkout?.workDir, commitId = checkout?.commitId,
+            )
+            task.status = ScanTaskStatus.RUNNING
+            task.commitId = checkout?.commitId
+            scanTaskRepository.save(task)
 
-            if (!result.success) {
-                throw BusinessException(500, result.errorMessage ?: "engine scan failed")
+            // 五阶段管线（spec §5.1）：prepare → execute → collect → normalize
+            resolvedAdapter.prepareScan(context!!)
+            val execution = resolvedAdapter.executeScan(context!!)
+            val raw = resolvedAdapter.collectResult(context!!)
+            val normalizedRaw = resolvedAdapter.normalizeResult(context!!, raw)
+            val duration = execution.durationMs ?: (System.currentTimeMillis() - start)
+            if (!execution.success) {
+                throw BusinessException(500, execution.errorMessage ?: "engine scan failed")
             }
 
             val normalized = ArrayList<NewFinding>()
-            var skipped = 0
             val ruleIds = mutableSetOf<Long>()
-            for (raw in result.findings) {
-                val rule = ruleQueryService.publishedRuleByEngineRuleId(task.engine, raw.engineRuleId)
+            var skipped = 0
+            for (rawFinding in normalizedRaw) {
+                val rule = ruleQueryService.publishedRuleByEngineRuleId(task.engine, rawFinding.engineRuleId)
                 if (rule == null) { skipped++; continue }
                 ruleIds += rule.id!!
                 normalized += NewFinding(
-                    rule.ruleCode, rule.name, raw.filePath, raw.line,
-                    raw.severity, raw.category, raw.message, raw.codeSnippet,
+                    rule.ruleCode, rule.name, rawFinding.filePath, rawFinding.line,
+                    rawFinding.severity, rawFinding.category, rawFinding.message, rawFinding.codeSnippet,
                 )
             }
-            log(scanTaskId, "NORMALIZE", "INFO", "raw=${result.findings.size} mapped=${normalized.size} skipped=$skipped")
+            log(scanTaskId, "NORMALIZE", "INFO", "raw=${normalizedRaw.size} mapped=${normalized.size} skipped=$skipped")
 
             val upsert = findingService.upsertByFingerprint(task.projectId, scanTaskId, task.engine, normalized)
             val findings = findingRepository.findByProjectScanTask(scanTaskId)
@@ -146,6 +169,10 @@ class ScanOrchestrator(
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
             log(scanTaskId, "SCAN", "ERROR", e.message ?: "unknown failure")
+        } finally {
+            // spec §5.1/§5.2：adapter cleanup + 删除检出临时目录（均幂等，绝不触碰用户路径）
+            context?.let { adapter?.cleanup(it) }
+            checkoutDir?.let { gitCheckout.cleanup(it) }
         }
     }
 

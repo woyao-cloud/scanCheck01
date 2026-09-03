@@ -9,7 +9,7 @@ import com.example.compliance.project.application.ProjectService
 import com.example.compliance.result.engine.RawFinding
 import com.example.compliance.result.engine.ScanContext
 import com.example.compliance.result.engine.ScanEngineAdapter
-import com.example.compliance.result.engine.ScanResult
+import com.example.compliance.result.engine.ScanExecutionResult
 import com.example.compliance.rule.application.AddEngineBindingCommand
 import com.example.compliance.rule.application.CreateRuleCommand
 import com.example.compliance.rule.application.RuleService
@@ -37,14 +37,17 @@ class ReportApiIntegrationTest : AbstractIntegrationTest() {
         @Bean
         fun stubAdapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUB"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(
-                // Deviation (documented in task-5.1-report.md): engine rule id is "rpt-rule-sqli", NOT the
-                // brief's "stub-rule-sqli" — the frozen ScanPipelineIntegrationTest binds STUB-SQLI to
-                // ("STUB","stub-rule-sqli") in the same shared container, and RuleQueryService
-                // .publishedRuleByEngineRuleId returns firstOrNull{PUBLISHED} over all matching bindings,
-                // so a second rule on the same engine rule id makes BOTH scans' rule resolution ambiguous
-                // (breaks the frozen test's ruleCode count). Distinct engine rule id keeps both unambiguous.
-                findings = listOf(RawFinding("rpt-rule-sqli", "Rpt SQLi", "Demo.java", 10, "HIGH", "inject", "x = id;"))
+            // M8 新契约：编排器直接驱动五阶段，STUB 按五方法形态接入（Ruling：测试 STUB 适配器按新契约更新）。
+            // Deviation (documented in task-5.1-report.md): engine rule id is "rpt-rule-sqli", NOT the
+            // brief's "stub-rule-sqli" — the frozen ScanPipelineIntegrationTest binds STUB-SQLI to
+            // ("STUB","stub-rule-sqli") in the same shared container, and RuleQueryService
+            // .publishedRuleByEngineRuleId returns firstOrNull{PUBLISHED} over all matching bindings,
+            // so a second rule on the same engine rule id makes BOTH scans' rule resolution ambiguous
+            // (breaks the frozen test's ruleCode count). Distinct engine rule id keeps both unambiguous.
+            override fun executeScan(context: ScanContext): ScanExecutionResult =
+                ScanExecutionResult(success = true, durationMs = 5)
+            override fun collectResult(context: ScanContext): List<RawFinding> = listOf(
+                RawFinding("rpt-rule-sqli", "Rpt SQLi", "Demo.java", 10, "HIGH", "inject", "x = id;")
             )
         }
     }
@@ -74,7 +77,7 @@ class ReportApiIntegrationTest : AbstractIntegrationTest() {
 
         val task = scanTaskService.startScan(project.id!!, "STUB", "main")
         repeat(50) {
-            if (scanTaskService.get(task.id!!).status !in setOf(ScanTaskStatus.PENDING, ScanTaskStatus.RUNNING)) return@repeat
+            if (scanTaskService.get(task.id!!).status !in setOf(ScanTaskStatus.PENDING, ScanTaskStatus.PREPARING, ScanTaskStatus.RUNNING)) return@repeat
             Thread.sleep(200)
         }
 
