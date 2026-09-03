@@ -4,20 +4,42 @@ import com.example.compliance.common.api.ApiResponse
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
+import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.MethodArgumentNotValidException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+/** M9：BusinessException.code 映射 HTTP 状态。 */
 class GlobalExceptionHandlerTest {
     private val handler = GlobalExceptionHandler()
 
     @Test
-    fun `business exception becomes 400 with code and message`() {
+    fun `business exception code maps to HTTP status with code and message`() {
         val resp = handler.handleBusiness(BusinessException(422, "bad input"))
-        assertEquals(HttpStatus.BAD_REQUEST, resp.statusCode)
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.statusCode)
         assertEquals(422, resp.body?.code)
         assertEquals("bad input", resp.body?.message)
+    }
+
+    @Test
+    fun `code 404 maps to NOT_FOUND`() {
+        val resp: ResponseEntity<*> = handler.handleBusiness(BusinessException(404, "nope"))
+        assertEquals(HttpStatus.NOT_FOUND, resp.statusCode)
+    }
+
+    @Test
+    fun `code 409 maps to CONFLICT`() {
+        val resp: ResponseEntity<*> = handler.handleBusiness(BusinessException(409, "dup"))
+        assertEquals(HttpStatus.CONFLICT, resp.statusCode)
+    }
+
+    @Test
+    fun `missing resource maps to NOT_FOUND`() {
+        val resp: ResponseEntity<*> = handler.handleNotFound(NoResourceFoundException(HttpMethod.GET, "handler"))
+        assertEquals(HttpStatus.NOT_FOUND, resp.statusCode)
     }
 
     @Test
