@@ -59,14 +59,14 @@ class ScanOrchestrator(
         task.startedAt = Instant.now()
         scanTaskRepository.save(task)
         log(scanTaskId, "SCAN", "INFO", "start engine=${task.engine} project=${task.projectId}")
-        val version = checklistQueryService.publishedVersionForProject(task.projectId)
-        task.checklistVersionId = version?.id
-        log(scanTaskId, "PREPARE", "INFO", "checklistVersionId=${version?.id ?: "none"}")
         try {
             val repo = repoRepository.findByProjectId(task.projectId).firstOrNull()
                 ?: throw BusinessException(400, "project has no repository bound")
             val adapter = registry.get(task.engine)
                 ?: throw BusinessException(400, "unsupported engine: ${task.engine}")
+            val version = checklistQueryService.publishedVersionForProject(task.projectId)
+            task.checklistVersionId = version?.id
+            log(scanTaskId, "PREPARE", "INFO", "checklistVersionId=${version?.id ?: "none"}")
             val context = ScanContext(task.id!!, task.projectId, repo.gitUrl, task.ref)
             val start = System.currentTimeMillis()
             val result = adapter.scan(context)
