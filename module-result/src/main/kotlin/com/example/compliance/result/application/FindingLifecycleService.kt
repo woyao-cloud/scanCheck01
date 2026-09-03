@@ -46,12 +46,12 @@ class FindingLifecycleService(
     }
 
     @Transactional
-    override fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): FindingEvidence {
+    override fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): EvidenceView {
         val saved = evidenceRepository.save(FindingEvidence().apply {
             this.findingId = findingId; this.evidenceType = evidenceType; this.evidenceRef = evidenceRef; this.addedBy = changedBy
         })
         auditService.record("FINDING_EVIDENCE", "result", changedBy, "finding", findingId, "{\"type\":\"$evidenceType\",\"ref\":${quote(evidenceRef)}}")
-        return saved
+        return EvidenceView(saved.id!!, saved.findingId, saved.evidenceType, saved.evidenceRef, saved.addedBy, saved.addedAt)
     }
 
     /** 复扫验证：扫描完成后调用。处于 RECHECKING 的 finding —— 本次扫描缺席 → CLOSED；命中 → 回归 CONFIRMED。 */

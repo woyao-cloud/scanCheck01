@@ -67,7 +67,8 @@ class FindingLifecycleServiceTest {
 
     @Test
     fun `addEvidence persists evidence`() {
-        every { evidenceRepository.save(any<FindingEvidence>()) } answers { firstArg() }
+        // saved entity needs a non-null id for the service's EvidenceView mapping (EvidenceView.id)
+        every { evidenceRepository.save(any<FindingEvidence>()) } answers { firstArg<FindingEvidence>().apply { id = 1L } }
         val evidence = service.addEvidence(7L, "FIX_COMMIT", "abc123", 3L)
         assertEquals(7L, evidence.findingId)
         assertEquals("FIX_COMMIT", evidence.evidenceType)
