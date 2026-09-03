@@ -18,6 +18,7 @@
 
 1. **模块依赖**：叶子模块只依赖 `module-common`，互不 import 实体；唯一例外 `module-auth→module-user`；`module-scan` 可依赖 project/checklist/rule/result 接口；`app-server` 依赖全部。跨模块引用一律通过 ID 或接口。
    - **P2 例外 1（P2-D5）**：`module-remediation` 可依赖 `module-result` 的**接口与值类型**（`FindingLifecyclePort`、`FindingStatus` 枚举、`FindingView` DTO），禁止 import `@Entity`。
+   - **P2 例外 1b（PF-5）**：`module-remediation` 另可依赖 `module-scan` 的**单接口 + 值类型**（`ScanTriggerPort`、`ScanTaskView`）——仅此两物，用于 M7 requestRecheck 创建复扫任务；禁止 import scan 实体。
    - **P2 例外 2**：`module-openapi` 可依赖 `module-scan` 的接口（`ScanTriggerPort`），禁止 import 实体。
 2. **模块内分层**：`api/application/domain/infrastructure`；Controller 不写业务逻辑、不返回 Entity。
 3. **Kotlin 风格**：data class / enum class / val，避免 `!!`，优先不可变集合。
@@ -29,7 +30,7 @@
 
 **第二阶段追加约束：**
 - **复扫归属（P2-D2）**：finding 为项目指纹规范行（含 `project_id`），`scan_task_id` 语义 = 首次发现任务；每次扫描命中追加 `finding_history`（CREATED/REAPPEARED）；状态转移写 `finding_status`（追加）+ `audit_log`；`finding_history` 不记转移。
-- **状态权威（P2-D4）**：`finding.status` 为唯一权威；`remediation_task` **不设**状态列（省略 spec §4.1 的冗余缓存列，避免跨模块缓存同步；状态经 `FindingLifecyclePort` 查询）。
+- **状态权威（P2-D4）**：`finding.status` 为唯一权威；`remediation_task` 按 spec §4.1 设 **status 冗余缓存列**（同事务镜像 finding.status 写入，非第二权威，读取便捷；权威永远在 finding.status）。
 - **引擎 checkout（P2-D6）**：GitCheckout 归 `module-scan` 编排器层，adapter 只消费 `ScanContext.workDir`。
 - **OpenAPI Token（P2-D7）**：`openapi_token` 表按 CI 标识多 token，可独立禁用/过期；token 只存 BCrypt 哈希，明文仅创建时返回一次。
 - **Ruling #60（remote 约束）**：`origin`（woyao-cloud/scanCheck01，用户本人仓库）保留；**绝不 push**；不新增其他 remote；不重命名分支。全部 Gradle 命令用 `./gradlew`。
@@ -47,9 +48,9 @@
 | module-checklist application | `ChecklistQueryService.kt`（+publishedVersionForProject） | 版本解析 |
 | module-scan domain/application/infrastructure | `ScanTask.kt`（+版本列）、`ScanOrchestrator.kt`（盖章+occurrence+verify+checkout）、`ComplianceEvaluator.kt`、`ScanTaskService.kt`、`GitCheckout.kt`、`ScanTriggerPort.kt` | 编排 |
 | module-engine-adapter semgrep | `SemgrepAdapter.kt`（五方法）、`SemgrepCli.kt`（不改） | 真实引擎 |
-| module-remediation | 新建 api/application/domain/infrastructure + build.gradle 加 `module-result` | 整改闭环 |
+| module-remediation | 新建 api/application/domain/infrastructure + build.gradle 加 `module-result`（Task 7.1）+ `module-scan`（Task 7.4，ScanTriggerPort） | 整改闭环 + 复扫触发 |
 | module-openapi | 新建 api/application/domain/infrastructure + build.gradle 加 `module-scan` | CI 触发 + token 表 |
-| module-notification | `NotificationSender.kt` + `LogNotificationSender.kt` | 占位 |
+| module-notification | `notification/` 实体 + 仓储 + 服务 + `V11__notification.sql` | 通知落库桩 |
 | module-admin | api/application + 聚合端点 | 管理后台 |
 | module-auth config | `SecurityConfig.kt`（RBAC 矩阵 + openapi 路径） | 授权 |
 | module-common exception | `GlobalExceptionHandler.kt`（HTTP 状态映射） | 错误处理 |
@@ -100,7 +101,10 @@ CREATE INDEX idx_finding_status_finding ON finding_status (finding_id, changed_a
 ALTER TABLE finding_trace RENAME TO finding_history;
 ALTER TABLE finding_history ADD COLUMN changed_by BIGINT;
 ALTER TABLE finding_history ADD COLUMN detail TEXT;
-CREATE INDEX idx_finding_history_scan ON finding_history (scan_task_id, finding_id);
+-- PF-8：spec §3.1 要求 changed_at 与 (finding_id, changed_at DESC) 索引（基线 finding_trace 已含 changed_at 列，RENAME 保留；此处确保其存在）
+ALTER TABLE finding_history ADD COLUMN IF NOT EXISTS changed_at TIMESTAMP NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_finding_history_finding ON finding_history (finding_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_finding_history_scan ON finding_history (scan_task_id, finding_id);
 
 -- (4) 证据
 CREATE TABLE finding_evidence (
@@ -280,6 +284,8 @@ class FindingHistory : BaseEntity() {
     lateinit var action: String
     @Column(name = "changed_by")
     var changedBy: Long? = null
+    @Column(name = "changed_at", nullable = false)
+    var changedAt: java.time.Instant = java.time.Instant.now()
     @Column(name = "detail")
     var detail: String? = null
 }
@@ -429,14 +435,14 @@ git commit -m "feat(result): finding lifecycle entities and occurrence query (pr
 - Create: `module-result/src/test/kotlin/com/example/compliance/result/application/FindingLifecycleServiceTest.kt`
 
 **Interfaces:**
-- Consumes: Task 6.2 实体/仓储；`AuditService`（module-common，包 `com.example.compliance.common.audit.AuditService`，方法签名 `record(changedBy: Long?, action: String, targetType: String, targetId: Long, detail: String)`，以该文件实际签名为准）。
+- Consumes: Task 6.2 实体/仓储；`AuditService`（module-common，包 `com.example.compliance.common.audit.AuditService`，PF-9 真实签名）：`fun record(action: String, module: String, userId: Long? = null, resourceType: String? = null, resourceId: Long? = null, detail: String? = null, ip: String? = null)`（`@Transactional(REQUIRES_NEW)`）。
 - Produces: `FindingLifecyclePort` 接口（module-remediation 在 M7 依赖它）：
   - `fun transition(findingId: Long, to: FindingStatus, reason: String?, changedBy: Long?): FindingStatus`
   - `fun addEvidence(findingId: Long, evidenceType: String, evidenceRef: String, changedBy: Long?): FindingEvidence`
   - `fun findingsForScanTask(scanTaskId: Long): List<FindingView>`
   - `fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>`
   - `fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult`
-- Produces: `data class FindingView(id, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber, firstSeenAt, lastSeenAt, occurrenceCount)`、`data class VerifyResult(closed: Int, regressed: Int)`（module-result.application）。
+- Produces: `data class FindingView(id, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber, firstSeenAt, lastSeenAt, occurrenceCount, engine: String = "")`（engine 尾字段=发现引擎，M7/M8 消费）、`data class VerifyResult(closed: Int, regressed: Int)`（module-result.application）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -481,7 +487,7 @@ class FindingLifecycleServiceTest {
         assertSame(FindingStatus.CONFIRMED, result)
         assertEquals(FindingStatus.CONFIRMED, finding.status)
         verify { statusRepository.save(any<FindingStatusSnapshot>()) }
-        verify { auditService.record(any(), any(), any(), any(), any()) }
+        verify { auditService.record(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -540,6 +546,7 @@ data class FindingView(
     val firstSeenAt: java.time.Instant,
     val lastSeenAt: java.time.Instant,
     val occurrenceCount: Int,
+    val engine: String = "",   // 发现引擎（M7 复扫定位、M8 引擎契约断言消费）
 )
 
 data class VerifyResult(val closed: Int, val regressed: Int)
@@ -600,7 +607,7 @@ class FindingLifecycleService(
         statusRepository.save(FindingStatusSnapshot().apply {
             this.findingId = findingId; this.status = to; this.changedBy = changedBy; this.reason = reason
         })
-        auditService.record(changedBy, "FINDING_TRANSITION", "finding", findingId, "{\"from\":\"$from\",\"to\":\"$to\",\"reason\":${quote(reason)}}")
+        auditService.record("FINDING_TRANSITION", "result", changedBy, "finding", findingId, "{\"from\":\"$from\",\"to\":\"$to\",\"reason\":${quote(reason)}}")
         return to
     }
 
@@ -609,7 +616,7 @@ class FindingLifecycleService(
         val saved = evidenceRepository.save(FindingEvidence().apply {
             this.findingId = findingId; this.evidenceType = evidenceType; this.evidenceRef = evidenceRef; this.addedBy = changedBy
         })
-        auditService.record(changedBy, "FINDING_EVIDENCE", "finding", findingId, "{\"type\":\"$evidenceType\",\"ref\":${quote(evidenceRef)}}")
+        auditService.record("FINDING_EVIDENCE", "result", changedBy, "finding", findingId, "{\"type\":\"$evidenceType\",\"ref\":${quote(evidenceRef)}}")
         return saved
     }
 
@@ -633,7 +640,7 @@ class FindingLifecycleService(
 
     private fun com.example.compliance.result.domain.Finding.toView() = FindingView(
         id!!, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber,
-        firstSeenAt, lastSeenAt, occurrenceCount,
+        firstSeenAt, lastSeenAt, occurrenceCount, engine,
     )
 
     private fun quote(s: String?): String = "\"${s?.replace("\"", "\\\"") ?: ""}\""
@@ -882,7 +889,7 @@ git commit -m "feat(result): fingerprint upsert with project-scoped canonical ro
 
 **Interfaces:**
 - Consumes: Task 6.3 `FindingLifecycleService`/`FindingLifecyclePort.findingsForScanTask`/`verifyRechecking`；Task 6.2 `FindingRepository.findByProjectScanTask`。
-- Produces: `ChecklistQueryService.publishedVersionForProject(projectId): ChecklistVersion?`；`ScanTask.checklistVersionId/ruleIds/commitId/durationMs/requestId`；`ScanTaskService.startScan(projectId, engine, ref, triggerType="MANUAL"): ScanTask`（内部生成 requestId=UUID）；`ComplianceEvaluator.evaluate(projectId, checklistVersionId, findings)`。
+- Produces: `ChecklistQueryService.publishedVersionForProject(projectId): ChecklistVersion?`；`ScanTask.checklistVersionId/ruleIds/commitId/durationMs/requestId`；`ScanTaskService.startScan(projectId, engine, ref, triggerType="MANUAL", requestId: String? = null): ScanTask`（requestId 缺省内部生成 UUID；M7 requestRecheck 传 `recheck-f<findingId>` 唯一定位复扫，V8 已建 request_id 列）；`ComplianceEvaluator.evaluate(projectId, checklistVersionId, findings)`。
 
 - [ ] **Step 1: 写失败测试（评估器版本参数化）**
 
@@ -950,7 +957,7 @@ Expected: 编译失败 — `evaluate` 三参数签名未定义。
 `ScanTaskService.startScan` 改为：
 
 ```kotlin
-    fun startScan(projectId: Long, engine: String, ref: String?, triggerType: String = "MANUAL"): ScanTask {
+    fun startScan(projectId: Long, engine: String, ref: String?, triggerType: String = "MANUAL", requestId: String? = null): ScanTask {
         if (registry.get(engine) == null) {
             throw BusinessException(400, "unsupported engine: $engine")
         }
@@ -960,7 +967,7 @@ Expected: 编译失败 — `evaluate` 三参数签名未定义。
             this.engine = engine
             this.ref = ref
             this.triggerType = triggerType
-            this.requestId = java.util.UUID.randomUUID().toString()
+            this.requestId = requestId ?: java.util.UUID.randomUUID().toString()
         })
         orchestrator.executeAsync(task.id!!)
         return task
@@ -1177,23 +1184,28 @@ git commit -m "test(scan): M6 lifecycle integration - version stamping and re-sc
 > **M6 完成标准**：V8 迁移可执行；finding 带 project_id 与 11 态；复扫 occurrence 归属正确；版本盖章贯通 scan→result→evaluation；`./gradlew build` 全绿。
 
 ---
-## M7 — 整改闭环（remediation）
+## M7 — 整改闭环（module-remediation）
 
-> **模块落地说明**：M7 首次给 `module-remediation` 写入实现。该模块当前仅有 `package-info.kt` 与 `build.gradle.kts`（只依赖 module-common）。本里程碑按 P2-D5 引入对 module-result 的接口依赖（`FindingLifecyclePort`），并在 `module-remediation/build.gradle.kts` 增加 `implementation(project(":module-result"))`。模块间依赖方向：remediation → result（接口），remediation 不依赖 scan（recheck 由 scan 编排器触发，见 7.4）。
+> **模块落地说明**：M7 首次给 `module-remediation` 写入实现。该模块当前仅有 `package-info.kt` 与 `build.gradle.kts`（只依赖 module-common）。按 P2-D5（例外）：remediation 可依赖 module-result 的**接口与值类型**（`FindingLifecyclePort`、`FindingStatus`、`FindingView`），禁止 import 任何 `@Entity`。**另经 pre-flight ruling PF-5**：Task 7.4 的 recheck 需创建复扫任务（spec §4.3/§4.4 绑定），因此 remediation 额外依赖 module-scan 的 **`ScanTriggerPort` 接口**（只 import 接口，不 import 实体）。
+>
+> **状态权威约定（P2-D4，本 M7 所有任务遵守）**：`finding.status` 是唯一权威，转移一律经 `FindingLifecyclePort.transition`；`remediation_task.status` 仅是**同事务写入的冗余缓存列**（供查询过滤），每成功转移后把返回值镜像写回 `task.status` 并 save，永不作独立判定源。
 
-### Task 7.1: 整改任务领域模型 + 证据实体
+### Task 7.1: 整改任务领域模型 + 状态冗余列
 
 **Files:**
 - Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/domain/RemediationTask.kt`
-- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/domain/RemediationAction.kt`（枚举 + 关联）
 - Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/infrastructure/RemediationTaskRepository.kt`
-- Create: `app-server/src/main/resources/db/migration/V9__remediation_task.sql`
 - Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationTaskView.kt`
-- Create: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（仅含 7.1 可测部分，7.2/7.3 扩展）
+- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/FindingRemediationView.kt`
+- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（assign/get/listByProject 核心，7.2/7.3/7.4 扩展）
+- Create: `app-server/src/main/resources/db/migration/V9__remediation_task.sql`
+- Create: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`
+- Modify: `module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecyclePort.kt`（+findById）
+- Modify: `module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecycleService.kt`（实现 findById）
 
 **Interfaces:**
-- Consumes: `BaseEntity`（module-common.domain，既有多字段实体基类）；`FindingLifecyclePort`（Task 6.3，module-result.application）。
-- Produces: 实体 `RemediationTask`（不含状态列，P2-D4 状态权威在 finding）、`RemediationAction` 枚举 `ASSIGNED_COMMENT / PLAN_COMMENT / EVIDENCE_ADDED / STATUS_TRANSITION / REOPENED / WAIVER_GRANTED / WAIVER_REVOKED`（字段以实际需要为准，可含 comment）；仓储 `RemediationTaskRepository : JpaRepository<RemediationTask, Long>`（含 `findByFindingId`、`findByProjectId`、`findByAssigneeId`）；`RemediationTaskView` DTO。
+- Consumes: `BaseEntity`（module-common.domain）；`FindingLifecyclePort`（Task 6.3）+ 本任务补 `findById(findingId): FindingView?`；`FindingView`（Task 6.3，尾部 `engine` 字段由 Task 6.3 补默认 `= ""`）。
+- Produces: 实体 `RemediationTask`（**含 status 冗余缓存列**，P2-D4）；`RemediationTaskView`（任务 DTO）；`FindingRemediationView(finding, task?)`（finding 中心响应）；仓储 `RemediationTaskRepository : JpaRepository<RemediationTask, Long>`（`findByFindingId`、`findByProjectId`、`findByAssigneeUserId`）；`RemediationService.assign(findingId, actorId, assigneeUserId?, plan?, dueDate?): FindingRemediationView`。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1204,31 +1216,65 @@ package com.example.compliance.remediation.application
 
 import com.example.compliance.remediation.domain.RemediationTask
 import com.example.compliance.remediation.infrastructure.RemediationTaskRepository
+import com.example.compliance.result.application.FindingLifecyclePort
+import com.example.compliance.result.application.FindingView
+import com.example.compliance.result.domain.FindingStatus
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
-/** M7 单元测试：RemediationService 行为（状态权威在 finding，见 P2-D4）。 */
+/** M7 单元测试：状态权威在 finding，task.status 仅镜像（P2-D4）。 */
 class RemediationServiceTest {
 
     private val taskRepository = mockk<RemediationTaskRepository>()
     private val lifecyclePort = mockk<FindingLifecyclePort>()
     private val service = RemediationService(taskRepository, lifecyclePort)
 
+    private fun view(status: FindingStatus) = FindingView(
+        id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
+        status = status, filePath = "A.java", lineNumber = 1,
+        firstSeenAt = Instant.now(), lastSeenAt = Instant.now(), occurrenceCount = 1,
+    )
+
     @Test
-    fun `create task persists assigned task for finding`() {
-        val saved = RemediationTask().apply { id = 11L; findingId = 7L; assigneeId = 3L }
+    fun `assign creates task and mirrors assigned status`() {
+        val saved = RemediationTask().apply { id = 11L; findingId = 7L; assigneeUserId = 3L }
+        every { taskRepository.findByFindingId(7L) } returns null
         every { taskRepository.save(any<RemediationTask>()) } returns saved
-        every { lifecyclePort.transition(7L, com.example.compliance.result.domain.FindingStatus.ASSIGNED, "assigned", 9L) } returns com.example.compliance.result.domain.FindingStatus.ASSIGNED
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.CONFIRMED)
+        every { lifecyclePort.transition(7L, FindingStatus.ASSIGNED, "assigned", 9L) } returns FindingStatus.ASSIGNED
 
-        val view = service.create(9L, 7L, 9L, 3L, null, "assign to dev")
+        val result = service.assign(7L, 9L, 3L, "fix in sprint", null)
 
-        assertNotNull(view.id)
-        assertEquals(7L, view.findingId)
-        verify { lifecyclePort.transition(7L, com.example.compliance.result.domain.FindingStatus.ASSIGNED, "assigned", 9L) }
+        assertNotNull(result.task?.id)
+        assertEquals(7L, result.finding.id)
+        assertEquals(FindingStatus.ASSIGNED, result.finding.status)
+        assertEquals(FindingStatus.ASSIGNED, result.task?.status)   // 镜像
+        assertEquals(3L, result.task?.assigneeUserId)
+        verify { lifecyclePort.transition(7L, FindingStatus.ASSIGNED, "assigned", 9L) }
+    }
+
+    @Test
+    fun `assign rejects finding not in confirmed state`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.NEW)
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.assign(7L, 9L, 3L, null, null)
+        }
+        assertEquals("finding not in CONFIRMED state: 7", ex.message)
+    }
+
+    @Test
+    fun `get returns view with null task before assign`() {
+        every { taskRepository.findByFindingId(8L) } returns null
+        every { lifecyclePort.findById(8L) } returns view(FindingStatus.NEW)
+        val result = service.get(8L)
+        assertNull(result.task)
+        assertEquals(FindingStatus.NEW, result.finding.status)
     }
 }
 ```
@@ -1236,43 +1282,31 @@ class RemediationServiceTest {
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
-Expected: 编译失败 — `RemediationService` 不存在（module-remediation 目前无 test 源集内容，测试目录将自动创建）。
+Expected: 编译失败 — `RemediationService`/`RemediationTask` 不存在。
 
-- [ ] **Step 3: 写 V9 迁移**
+- [ ] **Step 3: 写 V9 迁移（对齐 spec §4.1 逐字）**
 
 创建 `app-server/src/main/resources/db/migration/V9__remediation_task.sql`：
 
 ```sql
--- 整改任务：一张表持有任务关联与责任人，不设状态列（P2-D4：finding.status 为唯一权威）
+-- 整改任务：status 为冗余缓存列（P2-D4，权威=finding.status，同事务镜像写入）
 CREATE TABLE remediation_task (
-    id                  BIGSERIAL PRIMARY KEY,
-    finding_id          BIGINT      NOT NULL,
-    project_id          BIGINT      NOT NULL,
-    assignee_id         BIGINT,
-    assigner_id         BIGINT,
-    planned_fix_date    DATE,
-    comment_text        TEXT,
-    version             BIGINT      NOT NULL DEFAULT 0,
-    created_at          TIMESTAMP   NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMP   NOT NULL DEFAULT now()
+    id               BIGSERIAL PRIMARY KEY,
+    finding_id       BIGINT      NOT NULL,
+    project_id       BIGINT      NOT NULL,
+    status           VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+    assignee_user_id BIGINT,
+    plan             TEXT,
+    due_date         DATE,
+    created_by       BIGINT,
+    created_at       TIMESTAMP   NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMP   NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_remediation_task_finding ON remediation_task (finding_id);
-CREATE INDEX idx_remediation_task_project ON remediation_task (project_id);
-CREATE INDEX idx_remediation_task_assignee ON remediation_task (assignee_id);
-
--- 整改活动日志（追加式）
-CREATE TABLE remediation_action (
-    id            BIGSERIAL PRIMARY KEY,
-    task_id       BIGINT      NOT NULL,
-    action_type   VARCHAR(32) NOT NULL,
-    comment       TEXT,
-    actor_id      BIGINT,
-    acted_at      TIMESTAMP   NOT NULL DEFAULT now(),
-    created_at    TIMESTAMP   NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMP   NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_remediation_action_task ON remediation_action (task_id, acted_at DESC);
+CREATE INDEX idx_remediation_finding  ON remediation_task (finding_id);
+CREATE INDEX idx_remediation_project  ON remediation_task (project_id, status);
 ```
+
+> 无 `remediation_action` 表（PF-3 裁决：spec §4.1 无此表，删除 comment 端点）。
 
 - [ ] **Step 4: 实现实体、仓储与 DTO**
 
@@ -1282,12 +1316,15 @@ CREATE INDEX idx_remediation_action_task ON remediation_action (task_id, acted_a
 package com.example.compliance.remediation.domain
 
 import com.example.compliance.common.domain.BaseEntity
+import com.example.compliance.result.domain.FindingStatus
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
 import jakarta.persistence.Table
 import java.time.LocalDate
 
-/** 整改任务：关联 finding，记录责任人；状态不在本实体（P2-D4，finding.status 唯一权威）。 */
+/** 整改任务：关联 finding，记录责任人/计划/期限。status 为冗余缓存列（P2-D4：权威=finding.status，同事务镜像写入，禁止第二权威）。 */
 @Entity
 @Table(name = "remediation_task")
 class RemediationTask : BaseEntity() {
@@ -1295,46 +1332,21 @@ class RemediationTask : BaseEntity() {
     var findingId: Long = 0
     @Column(name = "project_id", nullable = false)
     var projectId: Long = 0
-    @Column(name = "assignee_id")
-    var assigneeId: Long? = null
-    @Column(name = "assigner_id")
-    var assignerId: Long? = null
-    @Column(name = "planned_fix_date")
-    var plannedFixDate: LocalDate? = null
-    @Column(name = "comment_text")
-    var commentText: String? = null
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    var status: FindingStatus = FindingStatus.NEW
+    @Column(name = "assignee_user_id")
+    var assigneeUserId: Long? = null
+    @Column(name = "plan")
+    var plan: String? = null
+    @Column(name = "due_date")
+    var dueDate: LocalDate? = null
+    @Column(name = "created_by")
+    var createdBy: Long? = null
 }
 ```
 
-`RemediationAction.kt`：
-
-```kotlin
-package com.example.compliance.remediation.domain
-
-import com.example.compliance.common.domain.BaseEntity
-import jakarta.persistence.Column
-import jakarta.persistence.Entity
-import jakarta.persistence.Table
-import java.time.Instant
-
-enum class RemediationActionType { COMMENT, ASSIGNED_COMMENT, PLAN_COMMENT, EVIDENCE_ADDED, STATUS_TRANSITION, REOPENED, WAIVER_GRANTED, WAIVER_REVOKED }
-
-/** remediation_action：整改活动日志（追加式）。 */
-@Entity
-@Table(name = "remediation_action")
-class RemediationAction : BaseEntity() {
-    @Column(name = "task_id", nullable = false)
-    var taskId: Long = 0
-    @Enumerated(jakarta.persistence.EnumType.STRING)
-    @Column(name = "action_type", nullable = false, length = 32)
-    var actionType: RemediationActionType = RemediationActionType.COMMENT
-    @Column(name = "comment")
-    var comment: String? = null
-    @Column(name = "actor_id")
-    var actorId: Long? = null
-    @Column(name = "acted_at", nullable = false)
-    var actedAt: Instant = Instant.now()
-}
+> 注意 `status` 默认值是 **NEW**（实体侧），DB 默认 'OPEN' 仅是存量兼容——首次 save 前实体总是先 `transition` 镜像写入，不依赖 DB 默认值语义。
 
 `RemediationTaskRepository.kt`：
 
@@ -1347,7 +1359,7 @@ import org.springframework.data.jpa.repository.JpaRepository
 interface RemediationTaskRepository : JpaRepository<RemediationTask, Long> {
     fun findByFindingId(findingId: Long): RemediationTask?
     fun findByProjectId(projectId: Long): List<RemediationTask>
-    fun findByAssigneeId(assigneeId: Long): List<RemediationTask>
+    fun findByAssigneeUserId(assigneeUserId: Long): List<RemediationTask>
 }
 ```
 
@@ -1360,33 +1372,37 @@ import com.example.compliance.result.domain.FindingStatus
 import java.time.Instant
 import java.time.LocalDate
 
-/** 整改任务视图（含 finding 当前状态 —— 状态权威在 finding）。 */
+/** 整改任务视图（任务侧元数据；finding 状态在 FindingView，权威=finding.status）。 */
 data class RemediationTaskView(
     val id: Long,
     val findingId: Long,
     val projectId: Long,
-    val assigneeId: Long?,
-    val assignerId: Long?,
-    val plannedFixDate: LocalDate?,
-    val commentText: String?,
+    val assigneeUserId: Long?,
+    val createdBy: Long?,
+    val plan: String?,
+    val dueDate: LocalDate?,
     val status: FindingStatus,
-    val ruleCode: String,
-    val severity: String,
-    val filePath: String,
     val createdAt: Instant,
 )
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+`FindingRemediationView.kt`：
 
-Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
-Expected: 仍失败 — `RemediationService` 未实现。在 Step 6 实现后重跑。
+```kotlin
+package com.example.compliance.remediation.application
 
-- [ ] **Step 6: 实现 RemediationService 骨架（含 FindingLifecyclePort.findById）**
+import com.example.compliance.result.application.FindingView
 
-本任务一并给 `FindingLifecyclePort` 补 `findById`（7.1 的 `toView` 消费它；Task 7.2 的 API 也依赖它）。
+/** finding 中心响应：finding 全量视图 + 可空的整改任务元数据（未派单时为 null）。 */
+data class FindingRemediationView(
+    val finding: FindingView,
+    val task: RemediationTaskView?,
+)
+```
 
-`module-result/.../application/FindingLifecyclePort.kt` 接口追加：
+- [ ] **Step 5: FindingLifecyclePort 补 findById**
+
+`module-result/.../application/FindingLifecyclePort.kt` 接口追加（`FindingView` 是 module-result 自身 DTO，端口扩展合理——spec §4.4 端口清单非穷尽，finding 中心服务需按 id 读状态）：
 
 ```kotlin
     fun findById(findingId: Long): FindingView?
@@ -1399,6 +1415,10 @@ Expected: 仍失败 — `RemediationService` 未实现。在 Step 6 实现后重
         findingRepository.findById(findingId).map { it.toView() }.orElse(null)
 ```
 
+（`toView` 私有扩展已在 Task 6.3 定义；Task 6.3 已给 `FindingView` 尾部加 `engine: String = ""`。）
+
+- [ ] **Step 6: 实现 RemediationService 核心（assign/get/listByProject）**
+
 `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`：
 
 ```kotlin
@@ -1408,70 +1428,77 @@ import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.remediation.domain.RemediationTask
 import com.example.compliance.remediation.infrastructure.RemediationTaskRepository
 import com.example.compliance.result.application.FindingLifecyclePort
+import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.domain.FindingStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDate
 
-/** 整改闭环服务：只经 FindingLifecyclePort 驱动 finding 生命周期（P2-D5）。 */
+/** 整改闭环服务：经 FindingLifecyclePort 驱动 finding 生命周期（P2-D4/D5），task.status 仅镜像。 */
 @Service
 class RemediationService(
     private val taskRepository: RemediationTaskRepository,
     private val lifecyclePort: FindingLifecyclePort,
 ) {
-    /** 派单：创建整改任务并把 finding 置为 ASSIGNED。 */
+    /** 派单：创建整改任务并把 finding 置为 ASSIGNED（task.status 镜像写入）。 */
     @Transactional
-    fun create(
-        projectId: Long, findingId: Long, assignerId: Long, assigneeId: Long?,
-        plannedFixDate: LocalDate?, comment: String?,
-    ): RemediationTaskView {
-        if (taskRepository.findByFindingId(findingId) != null) {
-            throw BusinessException(409, "remediation task already exists for finding: $findingId")
+    fun assign(
+        findingId: Long, actorId: Long, assigneeUserId: Long?, plan: String?, dueDate: LocalDate?,
+    ): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.CONFIRMED) {
+            throw BusinessException(409, "finding not in CONFIRMED state: $findingId")
         }
-        val task = taskRepository.save(RemediationTask().apply {
-            this.projectId = projectId
+        val existing = taskRepository.findByFindingId(findingId)
+        val task = existing ?: taskRepository.save(RemediationTask().apply {
             this.findingId = findingId
-            this.assignerId = assignerId
-            this.assigneeId = assigneeId
-            this.plannedFixDate = plannedFixDate
-            commentText = comment
+            this.projectId = finding.projectId
+            this.createdBy = actorId
         })
-        lifecyclePort.transition(findingId, FindingStatus.ASSIGNED, "assigned", assignerId)
-        return task.toView(lifecyclePort)
+        if (existing == null) {
+            task.assigneeUserId = assigneeUserId
+            task.plan = plan
+            task.dueDate = dueDate
+        }
+        task.status = lifecyclePort.transition(findingId, FindingStatus.ASSIGNED, "assigned", actorId)
+        return FindingRemediationView(finding, taskRepository.save(task).toView())
     }
 
-    fun get(taskId: Long): RemediationTaskView {
-        val task = taskRepository.findById(taskId)
-            .orElseThrow { BusinessException(404, "remediation task not found: $taskId") }
-        return task.toView(lifecyclePort)
+    @Transactional(readOnly = true)
+    fun get(findingId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        return FindingRemediationView(finding, taskRepository.findByFindingId(findingId)?.toView())
     }
 
-    fun listByProject(projectId: Long): List<RemediationTaskView> =
-        taskRepository.findByProjectId(projectId).map { it.toView(lifecyclePort) }
-
-    fun listByAssignee(assigneeId: Long): List<RemediationTaskView> =
-        taskRepository.findByAssigneeId(assigneeId).map { it.toView(lifecyclePort) }
-
-    private fun RemediationTask.toView(port: FindingLifecyclePort): RemediationTaskView {
-        val f = port.findById(findingId)
-        return RemediationTaskView(
-            id!!, findingId, projectId, assigneeId, assignerId, plannedFixDate, commentText,
-            status = f?.status ?: FindingStatus.NEW,
-            ruleCode = f?.ruleCode ?: "",
-            severity = f?.severity ?: "",
-            filePath = f?.filePath ?: "",
-            createdAt = createdAt,
-        )
+    @Transactional(readOnly = true)
+    fun listByProject(projectId: Long): List<FindingRemediationView> {
+        val tasks = taskRepository.findByProjectId(projectId).associateBy { it.findingId }
+        return tasks.values.map { task ->
+            FindingRemediationView(
+                lifecyclePort.findById(task.findingId) ?: return@map null,
+                task.toView(),
+            )
+        }.filterNotNull()
     }
+
+    protected fun mustGetFinding(findingId: Long): FindingView =
+        lifecyclePort.findById(findingId)
+            ?: throw BusinessException(404, "finding not found: $findingId")
+
+    private fun RemediationTask.toView() = RemediationTaskView(
+        id!!, findingId, projectId, assigneeUserId, createdBy, plan, dueDate, status, createdAt!!,
+    )
 }
 ```
+
+> `listByProject` 以任务表为入口，missing finding 防御性跳过（`filterNotNull`）；Task 7.2 的 GET /findings 会用 `lifecyclePort.findingsByProject` + 任务表 left join 的完整版。
 
 - [ ] **Step 7: 运行测试确认通过**
 
 Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
-Expected: PASS（`toView` 经 `findById` 解析 finding，7.1 单测只断言 view.id/findingId，无需 stub findById）。
+Expected: PASS（3 个测试）。
 
-- [ ] **Step 8: 运行全量 build**
+- [ ] **Step 8: 全量回归**
 
 Run: `./gradlew build`
 Expected: BUILD SUCCESSFUL。
@@ -1480,195 +1507,180 @@ Expected: BUILD SUCCESSFUL。
 
 ```bash
 git add module-remediation module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecyclePort.kt module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecycleService.kt app-server/src/main/resources/db/migration/V9__remediation_task.sql
-git commit -m "feat(remediation): remediation task domain, V9 migration, lifecycle findById, and service skeleton"
+git commit -m "feat(remediation): remediation task domain with status mirror, V9 migration, lifecycle findById, service core"
 ```
 
-> **模块依赖说明**：执行本任务前须在 `module-remediation/build.gradle.kts` 增加：
+> **模块依赖**：执行前在 `module-remediation/build.gradle.kts` 增加：
 > ```kotlin
 > dependencies {
 >     implementation(project(":module-result"))
 > }
 > ```
-> 并确保 `module-remediation` 的 test 依赖含 JUnit/MockK（与其他模块对齐，见 `module-scan/build.gradle.kts` 既有 testImplementation 块；若无测试依赖，V9 单测将因缺少库而编译失败——按既有模块测试配置补齐即可）。
+> 并补 test 依赖（JUnit/MockK，对齐 `module-scan/build.gradle.kts` 既有 testImplementation 块）。`module-scan` 依赖（ScanTriggerPort）到 Task 7.4 再加。
 
 ---
 
-### Task 7.2: 整改闭环 API（派单 / 处理中 / 修复 + 证据）
+### Task 7.2: finding 中心端点（confirm/assign/fixing/fixed/evidence + GET 列表）
 
 **Files:**
-- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（create 签名 + 状态驱动方法）
 - Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationController.kt`
-- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationApi.kt`（OpenAPI 注解接口，若模块惯例如此则建）
-- Modify: `module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecyclePort.kt`（+findById）
-- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（补状态驱动测试）
-- Create: `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`（Spring MVC 切片测试，MockMvc）
+- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（+confirm/startFix/markFixed/addEvidence/list）
+- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（+转移测试）
+- Create: `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`（切片）
 
 **Interfaces:**
-- Consumes: `FindingLifecyclePort`（含新 `findById`）；`RemediationTaskRepository`。
-- Produces: HTTP API（挂 `/api/v1/remediation`）：
-  - `POST /api/v1/remediation/tasks` body `CreateRemediationTaskCommand(projectId, findingId, assigneeId?, plannedFixDate?, comment?)` → 201 + `RemediationTaskView`（finding→ASSIGNED）
-  - `POST /api/v1/remediation/tasks/{id}/comment` body `CommentCommand(text)` → 200 + `RemediationTaskView`（追加活动日志）
-  - `POST /api/v1/remediation/tasks/{id}/evidence` body `AddEvidenceCommand(evidenceType, evidenceRef)` → 200 + view（经 `lifecyclePort.addEvidence`）
-  - `POST /api/v1/remediation/tasks/{id}/start-fix` → 200（finding→FIXING，仅 ASSIGNED 可转，否则 409）
-  - `POST /api/v1/remediation/tasks/{id}/mark-fixed` → 200（finding→FIXED，仅 FIXING 可转，否则 409；写证据要求 FIX_COMMIT）
-  - `GET /api/v1/remediation/tasks?projectId=&assigneeId=` → 200 + 列表
+- Consumes: Task 7.1 服务/视图；`FindingLifecyclePort.transition/addEvidence`；`FindingView.engine`（Task 6.3）。
+- Produces: `RemediationService` 扩展方法（finding 中心，全部带 from 状态守卫，409 拒绝非法转移）：
+  - `confirm(findingId, actorId): FindingRemediationView`（NEW→CONFIRMED）
+  - `startFix(findingId, actorId): FindingRemediationView`（ASSIGNED→FIXING）
+  - `markFixed(findingId, actorId, evidenceType, evidenceRef): FindingRemediationView`（FIXING→FIXED，必附 evidence）
+  - `addEvidence(findingId, actorId, evidenceType, evidenceRef): FindingRemediationView`（追加证据，无转移）
+  - `list(projectId?, status?, severity?, page: Int, size: Int): List<FindingRemediationView>`（GET /findings）
+- Produces: `RemediationController` 端点（spec §4.4）：
+  - `GET /api/v1/remediation/findings`（query: projectId/status/severity/page/size）
+  - `POST /api/v1/remediation/findings/{id}/confirm`
+  - `POST /api/v1/remediation/findings/{id}/assign`（body: assigneeId/plan/dueDate）
+  - `POST /api/v1/remediation/findings/{id}/fixing`
+  - `POST /api/v1/remediation/findings/{id}/fixed`（body: evidenceType/evidenceRef）
+  - `POST /api/v1/remediation/findings/{id}/evidence`（body: evidenceType/evidenceRef）
 
-- [ ] **Step 1: 确认 create 签名（已在 7.1 落地）**
-
-`RemediationService.create(projectId, findingId, assignerId, assigneeId, plannedFixDate, comment)` 已在 Task 7.1 Step 6 采用最终签名，`FindingLifecyclePort.findById` 也已落地——本任务直接在其上扩展状态驱动方法，无需改动既有签名。
-
-- [ ] **Step 2: 写失败测试（状态机守卫）**
+- [ ] **Step 1: 写失败测试（转移守卫 + 证据）**
 
 `RemediationServiceTest.kt` 追加：
 
 ```kotlin
     @Test
-    fun `mark-fixed from non-fixing state is rejected`() {
-        // finding 当前 CONFIRMED（未进入 FIXING）
-        every { lifecyclePort.findById(7L) } returns FindingView(
-            id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
-            status = com.example.compliance.result.domain.FindingStatus.CONFIRMED,
-            filePath = "A.java", lineNumber = 1,
-            firstSeenAt = java.time.Instant.now(), lastSeenAt = java.time.Instant.now(), occurrenceCount = 1,
-        )
+    fun `confirm requires NEW`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.CONFIRMED)
         val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
-            service.markFixed(11L, 9L, "abc123")
+            service.confirm(7L, 9L)
         }
-        kotlin.test.assertEquals("finding not in FIXING state: 7", ex.message)
+        assertEquals("finding not in NEW state: 7", ex.message)
+    }
+
+    @Test
+    fun `fixed requires evidence and transitions from fixing`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXING)
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply { id = 11L; findingId = 7L }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) } returns
+            com.example.compliance.result.domain.FindingEvidence().apply { id = 1L }
+        every { lifecyclePort.transition(7L, FindingStatus.FIXED, "fixed", 9L) } returns FindingStatus.FIXED
+
+        val result = service.markFixed(7L, 9L, "FIX_COMMIT", "deadbeef")
+
+        assertEquals(FindingStatus.FIXED, result.finding.status)
+        verify { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) }
+    }
+
+    @Test
+    fun `fixed without evidence is rejected`() {
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.markFixed(7L, 9L, "", "")
+        }
+        assertEquals("evidence required for fixed", ex.message)
     }
 ```
 
-（`markFixed(taskId, actorId, fixCommit)` 签名以 Step 3 实现为准；若断言消息不一致，以实现为准调整测试。）
+（`view(...)` helper 在 Task 7.1 已定义；mock 内 `service` 仍为 Task 7.1 的构造。）
 
-- [ ] **Step 3: 实现状态驱动方法与状态机守卫**
+- [ ] **Step 2: 运行确认失败**
+
+Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
+Expected: 编译失败 — `confirm`/`startFix`/`markFixed`/`addEvidence` 未定义。
+
+- [ ] **Step 3: 实现服务扩展**
 
 `RemediationService` 追加：
 
 ```kotlin
-    /** 进入处理中：仅 ASSIGNED 可转 FIXING。 */
+    /** 人工确认问题真实存在：NEW → CONFIRMED。 */
     @Transactional
-    fun startFix(taskId: Long, actorId: Long): RemediationTaskView {
-        val task = mustGet(taskId)
-        val f = lifecyclePort.findById(task.findingId) ?: throw BusinessException(404, "finding not found: ${task.findingId}")
-        if (f.status != FindingStatus.ASSIGNED) throw BusinessException(409, "finding not in ASSIGNED state: ${task.findingId}")
-        lifecyclePort.transition(task.findingId, FindingStatus.FIXING, "fix_started", actorId)
-        return task.toView(lifecyclePort)
-    }
-
-    /** 标记修复完成：仅 FIXING 可转 FIXED；必须提供修复 commit 作为证据。 */
-    @Transactional
-    fun markFixed(taskId: Long, actorId: Long, fixCommit: String): RemediationTaskView {
-        val task = mustGet(taskId)
-        val f = lifecyclePort.findById(task.findingId) ?: throw BusinessException(404, "finding not found: ${task.findingId}")
-        if (f.status != FindingStatus.FIXING) throw BusinessException(409, "finding not in FIXING state: ${task.findingId}")
-        lifecyclePort.addEvidence(task.findingId, "FIX_COMMIT", fixCommit, actorId)
-        lifecyclePort.transition(task.findingId, FindingStatus.FIXED, "fixed_by_commit_$fixCommit", actorId)
-        return task.toView(lifecyclePort)
-    }
-
-    /** 补充证据（无状态守卫，可随时添加）。 */
-    @Transactional
-    fun addEvidence(taskId: Long, actorId: Long, evidenceType: String, evidenceRef: String): RemediationTaskView {
-        val task = mustGet(taskId)
-        lifecyclePort.addEvidence(task.findingId, evidenceType, evidenceRef, actorId)
-        return task.toView(lifecyclePort)
-    }
-
-    /** 追加整改评论。 */
-    @Transactional
-    fun addComment(taskId: Long, actorId: Long, text: String): RemediationTaskView {
-        val task = mustGet(taskId)
-        // 评论落 action 日志：RemediationAction 实体在 7.1 已建，此处经 actionRepository 追加 COMMENT 记录
-        return task.toView(lifecyclePort)
-    }
-
-    private fun mustGet(taskId: Long): RemediationTask =
-        taskRepository.findById(taskId).orElseThrow { BusinessException(404, "remediation task not found: $taskId") }
-```
-
-> `addComment` 的 action 写入：本任务实现时在 `RemediationService` 构造注入 `RemediationActionRepository : JpaRepository<RemediationAction, Long>`（`module-remediation/.../infrastructure/RemediationActionRepository.kt`，新建），`addComment` 内 save 一条 `RemediationAction(COMMENT, text, actorId)`。`toView` 私有扩展保持 7.1 版（经 `findById`）。
-
-- [ ] **Step 4: 实现 Controller（Spring MVC + OpenAPI 注解）**
-
-`RemediationController.kt`（按 `module-scan` 既有 Controller 惯例写，含 `@RestController`/`@RequestMapping("/api/v1/remediation")`、OpenAPI 注解、DTO `data class`）：
-
-```kotlin
-package com.example.compliance.remediation.api
-
-import com.example.compliance.remediation.application.CreateRemediationTaskCommand
-import com.example.compliance.remediation.application.RemediationService
-import com.example.compliance.remediation.application.RemediationTaskView
-import com.example.compliance.remediation.application.AddEvidenceCommand
-import com.example.compliance.remediation.application.CommentCommand
-import org.springframework.http.ResponseEntity
-import org.springframework.security.core.Authentication
-import org.springframework.web.bind.annotation.*
-
-/** 整改闭环 API（M7）。认证主体 id 从 Authentication 取（M9 前可放宽）。 */
-@RestController
-@RequestMapping("/api/v1/remediation")
-class RemediationController(private val service: RemediationService) {
-
-    @PostMapping("/tasks")
-    fun create(@RequestBody cmd: CreateRemediationTaskCommand, auth: Authentication?): ResponseEntity<RemediationTaskView> {
-        val actor = actorId(auth)
-        val view = service.create(cmd.projectId, cmd.findingId, actor, cmd.assigneeId, cmd.plannedFixDate, cmd.comment)
-        return ResponseEntity.status(201).body(view)
-    }
-
-    @PostMapping("/tasks/{id}/comment")
-    fun comment(@PathVariable id: Long, @RequestBody cmd: CommentCommand, auth: Authentication?): RemediationTaskView =
-        service.addComment(id, actorId(auth), cmd.text)
-
-    @PostMapping("/tasks/{id}/evidence")
-    fun evidence(@PathVariable id: Long, @RequestBody cmd: AddEvidenceCommand, auth: Authentication?): RemediationTaskView =
-        service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
-
-    @PostMapping("/tasks/{id}/start-fix")
-    fun startFix(@PathVariable id: Long, auth: Authentication?): RemediationTaskView =
-        service.startFix(id, actorId(auth))
-
-    @PostMapping("/tasks/{id}/mark-fixed")
-    fun markFixed(@PathVariable id: Long, @RequestBody cmd: MarkFixedCommand, auth: Authentication?): RemediationTaskView =
-        service.markFixed(id, actorId(auth), cmd.fixCommit)
-
-    @GetMapping("/tasks")
-    fun list(@RequestParam projectId: Long?, @RequestParam assigneeId: Long?): List<RemediationTaskView> =
-        when {
-            projectId != null -> service.listByProject(projectId)
-            assigneeId != null -> service.listByAssignee(assigneeId)
-            else -> emptyList()
+    fun confirm(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.NEW) {
+            throw BusinessException(409, "finding not in NEW state: $findingId")
         }
-
-    private fun actorId(auth: Authentication?): Long {
-        // M9 RBAC 落地前：认证主体名为 "u<userId>" 则解析；否则 fallback 1L
-        val name = auth?.name
-        return name?.removePrefix("u")?.toLongOrNull() ?: 1L
+        return FindingRemediationView(
+            lifecyclePort.transition(findingId, FindingStatus.CONFIRMED, "confirmed", actorId) toUnit finding,
+            taskRepository.findByFindingId(findingId)?.toView(),
+        )
     }
-}
+
+    /** 开始整改：ASSIGNED → FIXING。 */
+    @Transactional
+    fun startFix(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.ASSIGNED) {
+            throw BusinessException(409, "finding not in ASSIGNED state: $findingId")
+        }
+        return mirrorTransition(findingId, FindingStatus.FIXING, "fix_started", actorId)
+    }
+
+    /** 标记修复：FIXING → FIXED，必附 evidence。 */
+    @Transactional
+    fun markFixed(findingId: Long, actorId: Long, evidenceType: String, evidenceRef: String): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "evidence required for fixed")
+        }
+        if (finding.status != FindingStatus.FIXING) {
+            throw BusinessException(409, "finding not in FIXING state: $findingId")
+        }
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return mirrorTransition(findingId, FindingStatus.FIXED, "fixed", actorId)
+    }
+
+    /** 追加证据（无转移）。 */
+    @Transactional
+    fun addEvidence(findingId: Long, actorId: Long, evidenceType: String, evidenceRef: String): FindingRemediationView {
+        mustGetFinding(findingId)
+        if (evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "evidence required")
+        }
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return get(findingId)
+    }
+
+    /** GET /findings：按项目/状态/严重级过滤 + 分页（内存分页，spec §4.4）。 */
+    @Transactional(readOnly = true)
+    fun list(projectId: Long?, status: FindingStatus?, severity: String?, page: Int, size: Int): List<FindingRemediationView> {
+        val findings = lifecyclePort.findingsByProject(projectId ?: 0L, status)
+            .filter { severity == null || it.severity.equals(severity, ignoreCase = true) }
+        val tasks = taskRepository.findByProjectId(projectId ?: 0L).associateBy { it.findingId }
+        val views = findings.map { f -> FindingRemediationView(f, tasks[f.id]?.toView()) }
+        val from = (page.coerceAtLeast(0)) * size.coerceAtLeast(1)
+        return if (from >= views.size) emptyList() else views.subList(from, minOf(from + size, views.size))
+    }
+
+    /** 状态转移 + task.status 镜像（P2-D4）。 */
+    private fun mirrorTransition(findingId: Long, to: FindingStatus, reason: String, actorId: Long): FindingRemediationView {
+        val status = lifecyclePort.transition(findingId, to, reason, actorId)
+        val task = taskRepository.findByFindingId(findingId)
+        if (task != null) {
+            task.status = status
+            taskRepository.save(task)
+        }
+        return get(findingId)
+    }
+
+    /** 让 transition 的返回状态与 finding 视图共存（confirm 便捷写法）。 */
+    private fun FindingStatus.toUnit(finding: FindingView): FindingView = finding
 ```
 
-配套 DTO（`RemediationApi.kt` 或与 Controller 同文件的 `data class`，按模块惯例）：
+> 说明：`confirm` 里 `lifecyclePort.transition(...) toUnit finding` 是便捷写法，保持 `FindingRemediationView(finding, task)` 形态；`toUnit` 实为 identity 辅助。若实现嫌绕，`confirm` 可改写为 `mustGetFinding` 后再调 `transition` 并忽略返回值——**以最小惊讶为准，允许实现者简化**。`list` 的 `projectId` 缺省用 0L 兜底（findingsByProject 语义：项目过滤；无 projectId 时行为以 Task 6.3 的 `findingsByProject(projectId, status)` 为准——若其要求必传项目，则 GET /findings 的 projectId 必填）。
 
-```kotlin
-data class CreateRemediationTaskCommand(
-    val projectId: Long, val findingId: Long, val assigneeId: Long? = null,
-    val plannedFixDate: java.time.LocalDate? = null, val comment: String? = null,
-)
-data class CommentCommand(val text: String)
-data class AddEvidenceCommand(val evidenceType: String, val evidenceRef: String)
-data class MarkFixedCommand(val fixCommit: String)
-```
-
-- [ ] **Step 5: 写 Spring MVC 切片测试**
+- [ ] **Step 4: 写切片测试**
 
 创建 `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`：
 
 ```kotlin
 package com.example.compliance.remediation.api
 
+import com.example.compliance.remediation.application.FindingRemediationView
 import com.example.compliance.remediation.application.RemediationService
 import com.example.compliance.remediation.application.RemediationTaskView
+import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.domain.FindingStatus
 import io.mockk.every
 import io.mockk.mockk
@@ -1678,10 +1690,14 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
 import org.springframework.boot.test.mock.mockito.MockBean
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
-import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import java.time.Instant
 
-/** M7 API 切片测试：只验证 controller 契约（服务为 mock）。 */
+/** M7：remediation 控制器切片（finding 中心端点）。 */
 @WebMvcTest(RemediationController::class)
 class RemediationControllerTest {
 
@@ -1689,31 +1705,105 @@ class RemediationControllerTest {
 
     @MockBean lateinit var service: RemediationService
 
+    private val view = FindingRemediationView(
+        finding = FindingView(
+            id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
+            status = FindingStatus.ASSIGNED, filePath = "A.java", lineNumber = 1,
+            firstSeenAt = Instant.now(), lastSeenAt = Instant.now(), occurrenceCount = 1,
+        ),
+        task = RemediationTaskView(
+            id = 11L, findingId = 7L, projectId = 9L, assigneeUserId = 3L, createdBy = 1L,
+            plan = null, dueDate = null, status = FindingStatus.ASSIGNED, createdAt = Instant.now(),
+        ),
+    )
+
     @Test
-    fun `create task returns 201 with view`() {
-        every { service.create(9L, 7L, 1L, 3L, null, "assign") } returns RemediationTaskView(
-            id = 11L, findingId = 7L, projectId = 9L, assigneeId = 3L, assignerId = 1L,
-            plannedFixDate = null, commentText = "assign", status = FindingStatus.ASSIGNED,
-            ruleCode = "R1", severity = "HIGH", filePath = "A.java", createdAt = java.time.Instant.now(),
-        )
+    fun `assign returns assigned finding`() {
+        every { service.assign(7L, 1L, 3L, "plan", null) } returns view
         mockMvc.perform(
-            post("/api/v1/remediation/tasks")
+            post("/api/v1/remediation/findings/7/assign")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"projectId":9,"findingId":7,"assigneeId":3,"comment":"assign"}""")
+                .content("""{"assigneeId":3,"plan":"plan"}""")
         )
-            .andExpect(status().isCreated)
-            .andExpect(jsonPath("$.status").value("ASSIGNED"))
-            .andExpect(jsonPath("$.findingId").value(7))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.task.assigneeUserId").value(3))
+            .andExpect(jsonPath("$.finding.status").value("ASSIGNED"))
+    }
+
+    @Test
+    fun `list returns findings`() {
+        every { service.list(9L, null, null, 0, 20) } returns listOf(view)
+        mockMvc.perform(get("/api/v1/remediation/findings").param("projectId", "9"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$[0].finding.id").value(7))
     }
 }
 ```
 
-> `@WebMvcTest` 只加载 Controller 切片；`mockMvc` 经自动配置注入。`MockBean` 替换 `@MockBean` 的 `org.springframework.boot.test.mock.mockito.MockBean`（Boot 3.3 仍可用）。若 `@WebMvcTest` 因 Security 过滤链需要额外配置（当前 SecurityConfig 已 permitAll 登录/docs/health，其余 authenticated——切片测试默认无认证，`auth` 为 null → actorId=1L，与服务 stub 对齐即可；若 401 拦截，则在测试类加 `@AutoConfigureMockMvc(addFilters = false)`）。
+> `@WebMvcTest(RemediationController::class)` 需 controller 构造仅依赖 `RemediationService`（mock）。若 Security 过滤链拦截未认证访问，加 `@AutoConfigureMockMvc(addFilters = false)`（同 Task 9.2 说明）。请求体字段名以 Step 5 controller DTO 为准。
+
+- [ ] **Step 5: 实现 RemediationController**
+
+创建 `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationController.kt`：
+
+```kotlin
+package com.example.compliance.remediation.api
+
+import com.example.compliance.remediation.application.FindingRemediationView
+import com.example.compliance.remediation.application.RemediationService
+import com.example.compliance.result.domain.FindingStatus
+import org.springframework.security.core.Authentication
+import org.springframework.web.bind.annotation.*
+import java.time.LocalDate
+
+/** 整改闭环 finding 中心端点（spec §4.4）。 */
+@RestController
+@RequestMapping("/api/v1/remediation")
+class RemediationController(private val service: RemediationService) {
+
+    data class AssignCommand(val assigneeId: Long?, val plan: String?, val dueDate: LocalDate?)
+    data class EvidenceCommand(val evidenceType: String, val evidenceRef: String)
+
+    @GetMapping("/findings")
+    fun list(
+        @RequestParam(required = false) projectId: Long?,
+        @RequestParam(required = false) status: FindingStatus?,
+        @RequestParam(required = false) severity: String?,
+        @RequestParam(defaultValue = "0") page: Int,
+        @RequestParam(defaultValue = "20") size: Int,
+    ): List<FindingRemediationView> = service.list(projectId, status, severity, page, size)
+
+    @PostMapping("/findings/{id}/confirm")
+    fun confirm(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
+        service.confirm(id, actorId(auth))
+
+    @PostMapping("/findings/{id}/assign")
+    fun assign(@PathVariable id: Long, @RequestBody cmd: AssignCommand, auth: Authentication?): FindingRemediationView =
+        service.assign(id, actorId(auth), cmd.assigneeId, cmd.plan, cmd.dueDate)
+
+    @PostMapping("/findings/{id}/fixing")
+    fun fixing(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
+        service.startFix(id, actorId(auth))
+
+    @PostMapping("/findings/{id}/fixed")
+    fun fixed(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
+        service.markFixed(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
+
+    @PostMapping("/findings/{id}/evidence")
+    fun evidence(@PathVariable id: Long, @RequestBody cmd: EvidenceCommand, auth: Authentication?): FindingRemediationView =
+        service.addEvidence(id, actorId(auth), cmd.evidenceType, cmd.evidenceRef)
+
+    private fun actorId(auth: Authentication?): Long =
+        (auth?.principal as? com.example.compliance.common.security.AuthPrincipal)?.userId ?: 1L
+}
+```
+
+> `actorId` 从认证 principal 解析；既有项目其他 Controller 若已有同名解析函数（如 `ScanController` 内的私有 helper），以既有方式为准——**实现者按既有 Controller 的实际 principal 形态调整**（`AuthPrincipal` 类名以 module-common 既有安全类为准；若不存在，`actorId` 直接返回 1L 并在 M9 RBAC 任务接线真实身份）。
 
 - [ ] **Step 6: 运行测试确认通过**
 
 Run: `./gradlew :module-remediation:test`
-Expected: 全部 PASS（单测 + 切片）。
+Expected: PASS（服务单测 + 控制器切片）。
 
 - [ ] **Step 7: 全量回归**
 
@@ -1723,24 +1813,24 @@ Expected: BUILD SUCCESSFUL。
 - [ ] **Step 8: Commit**
 
 ```bash
-git add module-remediation module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecyclePort.kt module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecycleService.kt
-git commit -m "feat(remediation): remediation closed-loop API (assign, fix, evidence, comments)"
+git add module-remediation
+git commit -m "feat(remediation): finding-centric remediation endpoints (confirm/assign/fixing/fixed/evidence/list)"
 ```
 
 ---
 
-### Task 7.3: 豁免流程（WAIVER + 审计）
+### Task 7.3: 终态转移端点（PUT /findings/{id}/status）
 
 **Files:**
-- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（+waive/revokeWaiver）
-- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/domain/WaiverRecord.kt`
-- Create: `module-remediation/src/main/kotlin/com/example/compliance/remediation/infrastructure/WaiverRecordRepository.kt`
-- Modify: `app-server/src/main/resources/db/migration/V9__remediation_task.sql`（追加 waiver 表，或新增 V10）
-- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（+豁免测试）
+- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（+status）
+- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationController.kt`（+PUT status）
+- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（+终态测试）
+- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`（+PUT 切片）
 
 **Interfaces:**
-- Consumes: `FindingLifecyclePort`（transition 到 WAIVED / 从 WAIVED 转回 CONFIRMED）。
-- Produces: `WaiverRecord`（id, findingId, reason, grantedBy, grantedAt, expiresAt?, revokedAt?, revokedBy?）；`RemediationService.waive(findingId, reason, grantedBy, expiresAt?): RemediationTaskView`（finding→WAIVED，写审计）；`RemediationService.revokeWaiver(findingId, reason, actorId): RemediationTaskView`（finding→CONFIRMED，写审计）。
+- Consumes: Task 7.2 服务/控制器结构。
+- Produces: `RemediationService.status(findingId, to, reason, evidenceType, evidenceRef, actorId): FindingRemediationView`——`to` 限终态集 `IGNORED/FALSE_POSITIVE/ACCEPTED_RISK/WAIVED`（其余 400）；必附 reason + evidence（400）；任意当前状态可进入终态；写 evidence + transition + task.status 镜像。无 WaiverRecord 表（PF-6）。
+- Produces: `PUT /api/v1/remediation/findings/{id}/status` body `StatusCommand(status, reason, evidenceType?, evidenceRef?)`。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1748,206 +1838,96 @@ git commit -m "feat(remediation): remediation closed-loop API (assign, fix, evid
 
 ```kotlin
     @Test
-    fun `waive transitions finding to WAIVED and records waiver`() {
-        every { lifecyclePort.findById(7L) } returns FindingView(
-            id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
-            status = com.example.compliance.result.domain.FindingStatus.CONFIRMED,
-            filePath = "A.java", lineNumber = 1,
-            firstSeenAt = java.time.Instant.now(), lastSeenAt = java.time.Instant.now(), occurrenceCount = 1,
-        )
-        every { waiverRepository.save(any<WaiverRecord>()) } answers { firstArg() }
-        every { lifecyclePort.transition(7L, com.example.compliance.result.domain.FindingStatus.WAIVED, "waiver:accepted risk", 9L) } returns com.example.compliance.result.domain.FindingStatus.WAIVED
-        every { taskRepository.findByFindingId(7L) } returns null
+    fun `terminal status requires reason and evidence and is reached from any state`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.NEW)
+        every { taskRepository.findByFindingId(7L) } returns RemediationTask().apply { id = 11L; findingId = 7L }
+        every { taskRepository.save(any<RemediationTask>()) } answers { firstArg() }
+        every { lifecyclePort.addEvidence(7L, "DOC", "http://x/waiver", 9L) } returns
+            com.example.compliance.result.domain.FindingEvidence().apply { id = 2L }
+        every { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) } returns FindingStatus.WAIVED
 
-        service.waive(9L, 7L, "accepted risk", 9L, null)
+        val result = service.status(7L, FindingStatus.WAIVED, "risk accepted", "DOC", "http://x/waiver", 9L)
 
-        verify { lifecyclePort.transition(7L, com.example.compliance.result.domain.FindingStatus.WAIVED, any(), 9L) }
-        verify { waiverRepository.save(match { it.reason == "accepted risk" && it.findingId == 7L }) }
-    }
-```
-
-（`waive` 签名：`waive(projectId, findingId, reason, grantedBy, expiresAt: java.time.Instant?)`；测试 stub 相应调整。）
-
-- [ ] **Step 2: 运行确认失败**
-
-Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
-Expected: 编译失败 — `waive` 不存在、`WaiverRecord` 不存在。
-
-- [ ] **Step 3: 写 V10 迁移（waiver 表）**
-
-创建 `app-server/src/main/resources/db/migration/V10__waiver_record.sql`：
-
-```sql
--- 豁免记录：who/when/why + 过期与撤销
-CREATE TABLE waiver_record (
-    id          BIGSERIAL PRIMARY KEY,
-    finding_id  BIGINT      NOT NULL,
-    reason      TEXT        NOT NULL,
-    granted_by  BIGINT      NOT NULL,
-    granted_at  TIMESTAMP   NOT NULL DEFAULT now(),
-    expires_at  TIMESTAMP,
-    revoked_at  TIMESTAMP,
-    revoked_by  BIGINT,
-    created_at  TIMESTAMP   NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMP   NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_waiver_finding ON waiver_record (finding_id);
-```
-
-- [ ] **Step 4: 实现实体、仓储与服务方法**
-
-`WaiverRecord.kt` / `WaiverRecordRepository.kt`（`JpaRepository<WaiverRecord, Long>`，含 `findFirstByFindingIdOrderByIdDesc(findingId): WaiverRecord?`）。
-
-`RemediationService` 构造注入 `waiverRepository: WaiverRecordRepository`，追加：
-
-```kotlin
-    /** 豁免：记录 who/when/why，finding → WAIVED。 */
-    @Transactional
-    fun waive(projectId: Long, findingId: Long, reason: String, grantedBy: Long, expiresAt: Instant?): RemediationTaskView {
-        if (reason.isBlank()) throw BusinessException(400, "waiver reason is required")
-        waiverRepository.save(WaiverRecord().apply {
-            this.findingId = findingId; this.reason = reason
-            this.grantedBy = grantedBy; this.expiresAt = expiresAt
-        })
-        lifecyclePort.transition(findingId, FindingStatus.WAIVED, "waiver:$reason", grantedBy)
-        val task = taskRepository.findByFindingId(findingId)
-            ?: throw BusinessException(404, "remediation task not found for finding: $findingId")
-        return task.toView(lifecyclePort)
-    }
-
-    /** 撤销豁免：finding → CONFIRMED，回整改闭环。 */
-    @Transactional
-    fun revokeWaiver(findingId: Long, reason: String, actorId: Long): RemediationTaskView {
-        val latest = waiverRepository.findFirstByFindingIdOrderByIdDesc(findingId)
-            ?: throw BusinessException(404, "no waiver for finding: $findingId")
-        latest.revokedAt = Instant.now(); latest.revokedBy = actorId
-        waiverRepository.save(latest)
-        lifecyclePort.transition(findingId, FindingStatus.CONFIRMED, "waiver_revoked:$reason", actorId)
-        val task = taskRepository.findByFindingId(findingId)
-            ?: throw BusinessException(404, "remediation task not found for finding: $findingId")
-        return task.toView(lifecyclePort)
-    }
-```
-
-- [ ] **Step 5: 运行测试确认通过**
-
-Run: `./gradlew :module-remediation:test`
-Expected: PASS。
-
-- [ ] **Step 6: 全量回归**
-
-Run: `./gradlew build`
-Expected: BUILD SUCCESSFUL。
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add module-remediation app-server/src/main/resources/db/migration/V10__waiver_record.sql
-git commit -m "feat(remediation): waiver workflow with audit trail and revocation"
-```
-
----
-### Task 7.4: recheck 端点（FIXED → RECHECKING）+ 编排器复扫触发
-
-**Files:**
-- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（+requestRecheck）
-- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationController.kt`（+POST /tasks/{id}/recheck）
-- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（+recheck 测试）
-- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`（+recheck 切片）
-
-**Interfaces:**
-- Consumes: `FindingLifecyclePort.transition`；Task 7.2 服务/控制器结构。
-- Produces: `RemediationService.requestRecheck(taskId, actorId): RemediationTaskView`——仅 finding 处于 `FIXED` 时可转 `RECHECKING`（否则 409）；**recheck 端点只做状态转移，复扫本身由用户/CI 经既有 scan API 触发**（P2-D2 决定：复扫由编排器 post-scan 调 `verifyRechecking` 完成闭环，remediation 不依赖 scan 模块）。
-
-- [ ] **Step 1: 写失败测试**
-
-`RemediationServiceTest.kt` 追加：
-
-```kotlin
-    @Test
-    fun `request-recheck only allowed from FIXED`() {
-        every { lifecyclePort.findById(7L) } returns FindingView(
-            id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
-            status = com.example.compliance.result.domain.FindingStatus.FIXED,
-            filePath = "A.java", lineNumber = 1,
-            firstSeenAt = java.time.Instant.now(), lastSeenAt = java.time.Instant.now(), occurrenceCount = 1,
-        )
-        every { taskRepository.findById(11L) } returns java.util.Optional.of(
-            com.example.compliance.remediation.domain.RemediationTask().apply { id = 11L; findingId = 7L; projectId = 9L }
-        )
-        every { lifecyclePort.transition(7L, com.example.compliance.result.domain.FindingStatus.RECHECKING, "recheck_requested", 9L) } returns com.example.compliance.result.domain.FindingStatus.RECHECKING
-        every { taskRepository.findByFindingId(7L) } returns null
-
-        val view = service.requestRecheck(11L, 9L)
-
-        kotlin.test.assertEquals(com.example.compliance.result.domain.FindingStatus.RECHECKING, view.status)
+        assertEquals(FindingStatus.WAIVED, result.finding.status)
+        verify { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) }
     }
 
     @Test
-    fun `request-recheck from WAIVED is rejected`() {
-        every { lifecyclePort.findById(7L) } returns FindingView(
-            id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
-            status = com.example.compliance.result.domain.FindingStatus.WAIVED,
-            filePath = "A.java", lineNumber = 1,
-            firstSeenAt = java.time.Instant.now(), lastSeenAt = java.time.Instant.now(), occurrenceCount = 1,
-        )
-        every { taskRepository.findById(11L) } returns java.util.Optional.of(
-            com.example.compliance.remediation.domain.RemediationTask().apply { id = 11L; findingId = 7L; projectId = 9L }
-        )
+    fun `non-terminal target is rejected`() {
         val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
-            service.requestRecheck(11L, 9L)
+            service.status(7L, FindingStatus.CONFIRMED, "x", "DOC", "r", 9L)
         }
-        kotlin.test.assertEquals("finding not in FIXED state: 7", ex.message)
+        assertEquals("target status not terminal: CONFIRMED", ex.message)
     }
 ```
-
-（`requestRecheck` 的 view.status 来自 `toView` 的 `findById`——第一个测试 stub 返回的 FIXED 会被 transition 后再次 `findById` 读取；实现时 `toView` 在 transition 后调用，需要 stub `lifecyclePort.findById(7L)` 在第二次调用返回 RECHECKING 状态。**测试调整**：使用 `every { lifecyclePort.findById(7L) } returnsMany listOf(FIXED_VIEW, RECHECKING_VIEW)`，或断言改为 verify transition 调用而非 view.status。以实现为准使断言精确。）
 
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
-Expected: 编译失败 — `requestRecheck` 不存在。
+Expected: 编译失败 — `status` 未定义。
 
-- [ ] **Step 3: 实现 requestRecheck**
+- [ ] **Step 3: 实现服务 `status`**
 
 `RemediationService` 追加：
 
 ```kotlin
-    /** 请求复审：仅 FIXED 可转 RECHECKING。复扫本身由用户/CI 经 scan API 触发，本端点只做状态转移（P2-D2）。 */
+    /** 终态转移：IGNORED/FALSE_POSITIVE/ACCEPTED_RISK/WAIVED（必附 reason + evidence）。 */
     @Transactional
-    fun requestRecheck(taskId: Long, actorId: Long): RemediationTaskView {
-        val task = mustGet(taskId)
-        val f = lifecyclePort.findById(task.findingId) ?: throw BusinessException(404, "finding not found: ${task.findingId}")
-        if (f.status != FindingStatus.FIXED) throw BusinessException(409, "finding not in FIXED state: ${task.findingId}")
-        lifecyclePort.transition(task.findingId, FindingStatus.RECHECKING, "recheck_requested", actorId)
-        return task.toView(lifecyclePort)
+    fun status(
+        findingId: Long, to: FindingStatus, reason: String, evidenceType: String, evidenceRef: String, actorId: Long,
+    ): FindingRemediationView {
+        if (to !in TERMINAL_STATES) {
+            throw BusinessException(400, "target status not terminal: $to")
+        }
+        if (reason.isBlank() || evidenceType.isBlank() || evidenceRef.isBlank()) {
+            throw BusinessException(400, "reason and evidence required for terminal status")
+        }
+        mustGetFinding(findingId)
+        lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
+        return mirrorTransition(findingId, to, reason, actorId)
+    }
+
+    companion object {
+        /** 终态集（spec §4.2）：到达后仅复现/复审系统动作可离开。 */
+        val TERMINAL_STATES = setOf(
+            FindingStatus.IGNORED, FindingStatus.FALSE_POSITIVE,
+            FindingStatus.ACCEPTED_RISK, FindingStatus.WAIVED,
+        )
+    }
+```
+
+- [ ] **Step 4: 写 PUT 切片 + 控制器端点**
+
+`RemediationControllerTest.kt` 追加：
+
+```kotlin
+    @Test
+    fun `put status returns terminal finding`() {
+        every { service.status(7L, FindingStatus.WAIVED, "risk accepted", "DOC", "http://x", 1L) } returns
+            view.copy(finding = view.finding.copy(status = FindingStatus.WAIVED))
+        mockMvc.perform(
+            put("/api/v1/remediation/findings/7/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"status":"WAIVED","reason":"risk accepted","evidenceType":"DOC","evidenceRef":"http://x"}""")
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.finding.status").value("WAIVED"))
     }
 ```
 
 `RemediationController` 追加：
 
 ```kotlin
-    @PostMapping("/tasks/{id}/recheck")
-    fun recheck(@PathVariable id: Long, auth: Authentication?): RemediationTaskView =
-        service.requestRecheck(id, actorId(auth))
-```
+    data class StatusCommand(
+        val status: FindingStatus,
+        val reason: String,
+        val evidenceType: String?,
+        val evidenceRef: String?,
+    )
 
-- [ ] **Step 4: 写切片测试**
-
-`RemediationControllerTest.kt` 追加：
-
-```kotlin
-    @Test
-    fun `request recheck returns updated view`() {
-        every { service.requestRecheck(11L, 1L) } returns RemediationTaskView(
-            id = 11L, findingId = 7L, projectId = 9L, assigneeId = 3L, assignerId = 1L,
-            plannedFixDate = null, commentText = null, status = FindingStatus.RECHECKING,
-            ruleCode = "R1", severity = "HIGH", filePath = "A.java", createdAt = java.time.Instant.now(),
-        )
-        mockMvc.perform(post("/api/v1/remediation/tasks/11/recheck"))
-            .andExpect(status().isOk)
-            .andExpect(jsonPath("$.status").value("RECHECKING"))
-    }
+    @PutMapping("/findings/{id}/status")
+    fun status(@PathVariable id: Long, @RequestBody cmd: StatusCommand, auth: Authentication?): FindingRemediationView =
+        service.status(id, cmd.status, cmd.reason, cmd.evidenceType ?: "", cmd.evidenceRef ?: "", actorId(auth))
 ```
 
 - [ ] **Step 5: 运行测试确认通过**
@@ -1964,18 +1944,249 @@ Expected: BUILD SUCCESSFUL。
 
 ```bash
 git add module-remediation
-git commit -m "feat(remediation): recheck endpoint (FIXED -> RECHECKING) and state guard"
+git commit -m "feat(remediation): terminal status transition via PUT /findings/{id}/status"
+```
+
+> **M7 前段完成标准**：remediation_task 实体/迁移/服务/API 落地；状态权威始终在 finding（P2-D4）；终态转移守卫（reason+evidence）；Task 7.4 续 recheck 复扫闭环。
+
+---
+### Task 7.4: 复扫触发端口（ScanTriggerPort）+ recheck 闭环
+
+> **前置**：本任务依赖 m6c Task 6.5 的 `ScanTaskService.startScan(projectId, engine, ref, triggerType="MANUAL")`。为使复扫可追溯，m6c 的 startScan 将**增加可选 `requestId: String? = null` 参数**（内部 `this.requestId = requestId ?: UUID.randomUUID().toString()`，m6 编辑批次同步该行）。`ScanTask.requestId` 列已由 V8 迁移（Task 6.1 段(5)）创建。
+
+**Files:**
+- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTriggerPort.kt`（接口 + ScanTaskView）
+- Modify: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTaskService.kt`（实现 ScanTriggerPort）
+- Create: `module-scan/src/test/kotlin/com/example/compliance/scan/application/ScanTriggerPortTest.kt`
+- Modify: `module-remediation/build.gradle.kts`（+`implementation(project(":module-scan"))`）
+- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/application/RemediationService.kt`（构造 +requestRecheck）
+- Modify: `module-remediation/src/main/kotlin/com/example/compliance/remediation/api/RemediationController.kt`（+POST /findings/{id}/recheck）
+- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/application/RemediationServiceTest.kt`（构造 + requestRecheck 测试）
+- Modify: `module-remediation/src/test/kotlin/com/example/compliance/remediation/api/RemediationControllerTest.kt`（+recheck 切片）
+
+**Interfaces:**
+- Consumes: Task 6.5 `ScanTaskService.startScan(projectId, engine, ref, triggerType="MANUAL", requestId=null)`；Task 7.1 `RemediationService(taskRepository, lifecyclePort)` 构造（本任务改为三依赖）；Task 6.3 `FindingView.engine`（m6b 编辑批次补尾字段）。
+- Produces: `ScanTriggerPort`（module-scan.application）：
+  ```kotlin
+  data class ScanTaskView(id: Long, projectId: Long, engine: String, status: ScanTaskStatus, requestId: String)
+  interface ScanTriggerPort { fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView }
+  ```
+  （P2-D5 例外：remediation→module-scan 仅依赖此接口与值类型，不 import ScanTask 实体。输入 `requestId` 可空——缺省由 startScan 生成 UUID；输出 `ScanTaskView.requestId` 恒非空，因 startScan 总回填。）
+- Produces: `RemediationService.requestRecheck(findingId, actorId): FindingRemediationView` —— FIXED→RECHECKING（spec §4.2/§4.3：必先经 triggerPort 建复扫 ScanTask，trigger_type=MANUAL，reason=`recheck_requested:scan_<newTaskId>` 记入 finding_status；task.status 镜像）。
+- Produces: `POST /api/v1/remediation/findings/{id}/recheck`（无 body）。
+
+- [ ] **Step 1: 写失败测试（ScanTriggerPort + requestRecheck）**
+
+创建 `module-scan/src/test/kotlin/com/example/compliance/scan/application/ScanTriggerPortTest.kt`：
+
+```kotlin
+package com.example.compliance.scan.application
+
+import com.example.compliance.project.application.ProjectService
+import com.example.compliance.result.engine.EngineAdapterRegistry
+import com.example.compliance.result.infrastructure.FindingRepository
+import com.example.compliance.scan.domain.ScanTask
+import com.example.compliance.scan.domain.ScanTaskStatus
+import com.example.compliance.scan.infrastructure.ChecklistItemResultRepository
+import com.example.compliance.scan.infrastructure.ComplianceEvaluationRepository
+import com.example.compliance.scan.infrastructure.ScanTaskRepository
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
+import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
+
+/** M7：ScanTaskService 实现 ScanTriggerPort 契约（值类型，不泄露实体）。 */
+class ScanTriggerPortTest {
+
+    private val scanTaskRepository = mockk<ScanTaskRepository>()
+    private val projectService = mockk<ProjectService>()
+    private val registry = mockk<EngineAdapterRegistry>()
+    private val findingRepository = mockk<FindingRepository>()
+    private val evaluationRepository = mockk<ComplianceEvaluationRepository>()
+    private val itemResultRepository = mockk<ChecklistItemResultRepository>()
+    private val orchestrator = mockk<ScanOrchestrator>(relaxed = true)
+    private val service = ScanTaskService(
+        scanTaskRepository, projectService, registry, findingRepository,
+        evaluationRepository, itemResultRepository, orchestrator,
+    )
+
+    @Test
+    fun `triggerScan passes requestId through and returns value view`() {
+        val project = com.example.compliance.project.domain.Project().apply { id = 9L }
+        every { registry.get("STUBM7") } returns mockk()
+        every { projectService.get(9L) } returns project
+        every { scanTaskRepository.save(any<ScanTask>()) } answers {
+            firstArg<ScanTask>().apply { id = 42L }
+        }
+
+        val view = service.triggerScan(9L, "STUBM7", "main", "MANUAL", "recheck-f7")
+
+        assertEquals(42L, view.id)
+        assertEquals(9L, view.projectId)
+        assertEquals("recheck-f7", view.requestId)
+        assertEquals(ScanTaskStatus.PENDING, view.status)
+        verify { scanTaskRepository.save(match { it.requestId == "recheck-f7" && it.triggerType == "MANUAL" }) }
+    }
+}
+```
+
+> `Project`/`ScanTaskService` 构造依赖以实际文件为准（ScanTaskService 构造参数序见既有文件）；若 `Project` 构造需要必填字段，改 `Project().apply { id = 9L; /* 其余字段取默认 */ }`。
+
+`RemediationServiceTest.kt`：**构造函数改为三依赖**并追加 requestRecheck 测试（`private val triggerPort = mockk<com.example.compliance.scan.application.ScanTriggerPort>()`；`RemediationService(taskRepository, lifecyclePort, triggerPort)`）：
+
+```kotlin
+    @Test
+    fun `requestRecheck transitions fixed to rechecking and creates rescan`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.FIXED)
+        every { taskRepository.findByFindingId(7L) } returns null
+        every { lifecyclePort.transition(7L, FindingStatus.RECHECKING, "recheck_requested:scan_55", 9L) } returns FindingStatus.RECHECKING
+        every { triggerPort.triggerScan(9L, "STUB", null, "MANUAL", "recheck-f7") } returns
+            com.example.compliance.scan.application.ScanTaskView(55L, 9L, "STUB", com.example.compliance.scan.domain.ScanTaskStatus.PENDING, "recheck-f7")
+
+        val result = service.requestRecheck(7L, 9L)
+
+        assertEquals(FindingStatus.RECHECKING, result.finding.status)
+        verify { triggerPort.triggerScan(9L, "STUB", null, "MANUAL", "recheck-f7") }
+    }
+
+    @Test
+    fun `requestRecheck requires fixed`() {
+        every { lifecyclePort.findById(7L) } returns view(FindingStatus.NEW)
+        val ex = org.junit.jupiter.api.assertThrows<com.example.compliance.common.exception.BusinessException> {
+            service.requestRecheck(7L, 9L)
+        }
+        assertEquals("finding not in FIXED state: 7", ex.message)
+    }
+```
+
+> `view(...)` helper 已含 `engine = "STUB"`（m6b 编辑批次给 FindingView 补尾字段默认后，位置参数构造无需改；若 helper 显式传了 engine 则保持）。
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `./gradlew :module-scan:test --tests "*ScanTriggerPortTest*"` 与 `./gradlew :module-remediation:test --tests "*RemediationServiceTest*"`
+Expected: 编译失败 — `ScanTriggerPort`/`requestRecheck` 未定义；`RemediationService` 三参构造不存在。
+
+- [ ] **Step 3: 实现 ScanTriggerPort + ScanTaskService 实现**
+
+创建 `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTriggerPort.kt`：
+
+```kotlin
+package com.example.compliance.scan.application
+
+import com.example.compliance.scan.domain.ScanTaskStatus
+
+/** 复扫任务视图（值类型，不泄露 ScanTask 实体）。 */
+data class ScanTaskView(
+    val id: Long,
+    val projectId: Long,
+    val engine: String,
+    val status: ScanTaskStatus,
+    val requestId: String,
+)
+
+/** 复扫触发端口（spec §4.3/§4.4）：remediation 经此创建复扫任务。P2-D5 例外——remediation→module-scan 仅依赖此接口。 */
+interface ScanTriggerPort {
+    fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView
+}
+```
+
+`ScanTaskService` 类声明改为 `class ScanTaskService(...) : ScanTriggerPort`，追加：
+
+```kotlin
+    override fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView {
+        val task = startScan(projectId, engine, ref, triggerType, requestId)
+        return ScanTaskView(task.id!!, task.projectId, task.engine, task.status, task.requestId ?: "")
+    }
+```
+
+（m6c Task 6.5 的 startScan 同步改为 `fun startScan(projectId: Long, engine: String, ref: String?, triggerType: String = "MANUAL", requestId: String? = null): ScanTask`，内部 `this.requestId = requestId ?: java.util.UUID.randomUUID().toString()`。）
+
+- [ ] **Step 4: 实现 requestRecheck + 控制器端点**
+
+`module-remediation/build.gradle.kts` dependencies 追加：`implementation(project(":module-scan"))`。
+
+`RemediationService` 构造改为：
+
+```kotlin
+class RemediationService(
+    private val taskRepository: RemediationTaskRepository,
+    private val lifecyclePort: FindingLifecyclePort,
+    private val triggerPort: ScanTriggerPort,
+)
+```
+
+追加：
+
+```kotlin
+    /** 请求复扫验证：FIXED → RECHECKING，并创建复扫 ScanTask（trigger_type=MANUAL）。
+     *  spec §4.3：reason 记入 finding_status；复扫完成后由编排器 verifyRechecking 闭环。 */
+    @Transactional
+    fun requestRecheck(findingId: Long, actorId: Long): FindingRemediationView {
+        val finding = mustGetFinding(findingId)
+        if (finding.status != FindingStatus.FIXED) {
+            throw BusinessException(409, "finding not in FIXED state: $findingId")
+        }
+        val scan = triggerPort.triggerScan(
+            projectId = finding.projectId, engine = finding.engine, ref = null,
+            triggerType = "MANUAL", requestId = "recheck-f$findingId",
+        )
+        return mirrorTransition(findingId, FindingStatus.RECHECKING, "recheck_requested:scan_${scan.id}", actorId)
+    }
+```
+
+> `finding.engine` 来自 FindingView 尾部 `engine` 字段（m6b 编辑批次）。`mirrorTransition` 已在 Task 7.2 定义。时序说明：先建复扫任务再转移，故 reason 可携带 `scan_<id>`；复扫异步执行在扫描末尾才做 verifyRechecking，转移早已提交，竞态可忽略。
+
+`RemediationController` 追加：
+
+```kotlin
+    @PostMapping("/findings/{id}/recheck")
+    fun recheck(@PathVariable id: Long, auth: Authentication?): FindingRemediationView =
+        service.requestRecheck(id, actorId(auth))
+```
+
+- [ ] **Step 5: 写 recheck 切片测试**
+
+`RemediationControllerTest.kt` 追加：
+
+```kotlin
+    @Test
+    fun `recheck returns rechecking finding`() {
+        every { service.requestRecheck(7L, 1L) } returns
+            view.copy(finding = view.finding.copy(status = FindingStatus.RECHECKING))
+        mockMvc.perform(post("/api/v1/remediation/findings/7/recheck"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.finding.status").value("RECHECKING"))
+    }
+```
+
+- [ ] **Step 6: 运行测试确认通过**
+
+Run: `./gradlew :module-scan:test --tests "*ScanTriggerPortTest*"` 与 `./gradlew :module-remediation:test`
+Expected: PASS（模块-scan 1 个 + remediation 服务单测与控制器切片全绿）。
+
+- [ ] **Step 7: 全量回归**
+
+Run: `./gradlew build`
+Expected: BUILD SUCCESSFUL。
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add module-scan/src/main/kotlin/com/example/compliance/scan/application module-scan/src/test/kotlin/com/example/compliance/scan/application module-remediation
+git commit -m "feat(remediation,scan): scan trigger port and recheck close-loop (FIXED to RECHECKING + rescan task)"
 ```
 
 ---
 
-### Task 7.5: M7 集成测试 —— 整改闭环 + 复扫验证端到端
+### Task 7.5: M7 复扫闭环集成测试（absent→CLOSED / present→回归 CONFIRMED）
 
 **Files:**
 - Create: `app-server/src/test/kotlin/com/example/compliance/remediation/M7RemediationIntegrationTest.kt`
 
 **Interfaces:**
-- Consumes: Task 7.2/7.3/7.4 全部；M6 的 STUBM6 适配器模式（复用 M6LifecycleIntegrationTest 的 @TestConfiguration 形态，**需独立 STUB 引擎名与规则，避免与 M6 冲突**）；`FindingLifecyclePort`。
+- Consumes: Task 7.1-7.4 全部；Task 6.3 `FindingLifecyclePort`；Task 6.5 `ScanTaskService.startScan`/`ScanTaskRepository`（app-server 可 autowire 仓储）；`ProjectService`/`ChecklistService`/`RuleService` 用法沿用 ScanPipelineIntegrationTest（DTo 类名以既有为准）。
+- Produces: 无新接口——验证 spec §4.3 复扫验证闭环端到端。
 
 - [ ] **Step 1: 写集成测试**
 
@@ -2002,6 +2213,7 @@ import com.example.compliance.rule.application.RuleService
 import com.example.compliance.rule.application.SetPolicyCommand
 import com.example.compliance.scan.application.ScanTaskService
 import com.example.compliance.scan.domain.ScanTaskStatus
+import com.example.compliance.scan.infrastructure.ScanTaskRepository
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
@@ -2009,17 +2221,23 @@ import org.springframework.context.annotation.Bean
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** M7-* 数据前缀；独立 STUB 引擎 STUBM7，规则 stub-m7-rule，与 M6 的 STUBM6 不冲突。 */
+/** M7 复扫闭环（spec §4.3）：FIXED → recheck → 复扫 absent→CLOSED / present→回归 CONFIRMED。
+ *  数据前缀 REM-*；STUBM7 用静态 StubM7.findings 控制复扫命中/缺席。
+ *  scan() 兼容形态：Task 8.1 将 scan() 改为默认方法，本 override 前后均可编译（Ruling：STUB 解冻细化）。 */
 class M7RemediationIntegrationTest : AbstractIntegrationTest() {
+
+    /** 静态可控引擎输出：测试在 requestRecheck 前改写，决定复扫是否命中。 */
+    object StubM7 {
+        @Volatile
+        var findings: List<RawFinding> = emptyList()
+    }
 
     @TestConfiguration
     class StubM7AdapterConfig {
         @Bean
         fun stubM7Adapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUBM7"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(
-                findings = listOf(RawFinding("stub-m7-rule", "M7", "src/main/java/M7.java", 20, "HIGH", "m", "x=id;"))
-            )
+            override fun scan(context: ScanContext): ScanResult = ScanResult(findings = StubM7.findings)
         }
     }
 
@@ -2027,50 +2245,80 @@ class M7RemediationIntegrationTest : AbstractIntegrationTest() {
     @Autowired lateinit var checklistService: ChecklistService
     @Autowired lateinit var ruleService: RuleService
     @Autowired lateinit var scanTaskService: ScanTaskService
+    @Autowired lateinit var scanTaskRepository: ScanTaskRepository
     @Autowired lateinit var remediationService: RemediationService
     @Autowired lateinit var lifecyclePort: FindingLifecyclePort
 
+    private val raw = RawFinding("stub-m7-rule", "M7", "src/main/java/Rem.java", 10, "HIGH", "m", "x=id;")
+
     @Test
-    fun `assign - fix - recheck - verify closed loop`() {
-        // 1. 项目 + 仓库 + 清单发布绑定
-        val project = projectService.create(CreateProjectCommand("M7P", "M7 项目", null, null))
-        projectService.bindRepository(project.id!!, BindRepositoryCommand("m7-repo", "https://git.example.com/m7.git", "GITLAB", "main", "tok"))
-        val standard = checklistService.createStandard("M7-SEC", "M7 规范", null)
-        val checklist = checklistService.createChecklist(standard.id!!, "M7-BASIC", "M7 基线")
-        checklistService.addItem(checklist.id!!, com.example.compliance.checklist.application.AddItemCommand(itemCode = "M7-001", name = "M7 项", riskLevel = "HIGH"))
+    fun `recheck with finding absent closes it`() {
+        val findingId = setupFinding()
+        walkToFixed(findingId)
+        StubM7.findings = emptyList()          // 复扫缺席
+        remediationService.requestRecheck(findingId, 1L)
+        waitResolved(findingId)
+        assertEquals(FindingStatus.CLOSED, lifecyclePort.findById(findingId)!!.status)
+        assertRecheckTask(findingId)
+    }
+
+    @Test
+    fun `recheck with finding present regresses to confirmed`() {
+        val findingId = setupFinding()
+        walkToFixed(findingId)
+        StubM7.findings = listOf(raw)          // 复扫命中（同指纹 → REAPPEARED）
+        remediationService.requestRecheck(findingId, 1L)
+        waitResolved(findingId)
+        assertEquals(FindingStatus.CONFIRMED, lifecyclePort.findById(findingId)!!.status)
+        assertRecheckTask(findingId)
+    }
+
+    /** 首扫产生 finding（NEW），返回其 id。 */
+    private fun setupFinding(): Long {
+        val project = projectService.create(CreateProjectCommand("REMP", "M7 项目", null, null))
+        projectService.bindRepository(project.id!!, BindRepositoryCommand("rem-repo", "https://git.example.com/rem.git", "GITLAB", "main", "tok"))
+        val standard = checklistService.createStandard("REM-SEC", "M7 规范", null)
+        val checklist = checklistService.createChecklist(standard.id!!, "REM-BASIC", "M7 基线")
+        checklistService.addItem(checklist.id!!, com.example.compliance.checklist.application.AddItemCommand(itemCode = "REM-001", name = "M7 项", riskLevel = "HIGH"))
         val version = checklistService.publish(checklist.id!!)
         checklistService.bindProject(project.id!!, version.id!!)
-        // 2. 规则
-        val rule = ruleService.create(CreateRuleCommand("M7-SQLI", "M7 注入", "HIGH", null))
+        val rule = ruleService.create(CreateRuleCommand("REM-SQLI", "M7 注入", "HIGH", null))
         ruleService.addEngineBinding(rule.id!!, AddEngineBindingCommand("STUBM7", "stub-m7-rule", null))
-        ruleService.addComplianceMapping(rule.id!!, "M7-001")
+        ruleService.addComplianceMapping(rule.id!!, "REM-001")
         ruleService.setEvaluationPolicy(rule.id!!, SetPolicyCommand("FAIL", null, "severity == 'HIGH'"))
         ruleService.publish(rule.id!!)
-        // 3. 首扫 → finding NEW
+
+        StubM7.findings = listOf(raw)
         val task1 = scanTaskService.startScan(project.id!!, "STUBM7", "main")
         waitDone(task1.id!!)
-        val findings = lifecyclePort.findingsForScanTask(task1.id!!)
-        assertEquals(1, findings.size)
-        val findingId = findings[0].id
-        assertEquals(FindingStatus.NEW, findings[0].status)
-        // 4. 派单 → ASSIGNED
-        val assigned = remediationService.create(project.id!!, findingId, 9L, 3L, null, "handle")
-        assertEquals(FindingStatus.ASSIGNED, assigned.status)
-        // 5. 进入处理中 → FIXING
-        val fixing = remediationService.startFix(assigned.id, 9L)
-        assertEquals(FindingStatus.FIXING, fixing.status)
-        // 6. 标记修复 → FIXED（带 commit 证据）
-        val fixed = remediationService.markFixed(assigned.id, 9L, "deadbeef")
-        assertEquals(FindingStatus.FIXED, fixed.status)
-        // 7. 请求复审 → RECHECKING
-        val rechecking = remediationService.requestRecheck(assigned.id, 9L)
-        assertEquals(FindingStatus.RECHECKING, rechecking.status)
-        // 8. 复扫：STUB 仍报同一问题 → finding 复现，verifyRechecking 回归 CONFIRMED
-        val task2 = scanTaskService.startScan(project.id!!, "STUBM7", "main")
-        waitDone(task2.id!!)
-        val after = lifecyclePort.findingsForScanTask(task2.id!!)
-        assertEquals(1, after.size)
-        assertEquals(FindingStatus.CONFIRMED, after[0].status)   // 复现 → 回归 CONFIRMED（P2-D2 状态机）
+        return lifecyclePort.findingsForScanTask(task1.id!!).first().id
+    }
+
+    /** 走完整改路径到 FIXED：confirm → assign → fixing → fixed(evidence)。 */
+    private fun walkToFixed(findingId: Long) {
+        remediationService.confirm(findingId, 1L)
+        remediationService.assign(findingId, 1L, 3L, "fix plan", null)
+        remediationService.startFix(findingId, 1L)
+        remediationService.markFixed(findingId, 1L, "FIX_COMMIT", "abc123")
+        assertEquals(FindingStatus.FIXED, lifecyclePort.findById(findingId)!!.status)
+    }
+
+    /** 复扫任务存在性 + 元数据断言（requestId=recheck-f<findingId> 保证跨共享容器唯一可定位）。 */
+    private fun assertRecheckTask(findingId: Long) {
+        val task = scanTaskRepository.findAll().first { it.requestId == "recheck-f$findingId" }
+        assertEquals("MANUAL", task.triggerType)
+        assertEquals(ScanTaskStatus.SUCCESS, task.status)
+    }
+
+    /** 轮询直到复扫验证决议（finding 离开 RECHECKING）。 */
+    private fun waitResolved(findingId: Long) {
+        var done = false
+        repeat(100) {
+            val s = lifecyclePort.findById(findingId)!!.status
+            if (s != FindingStatus.RECHECKING) { done = true; return@repeat }
+            Thread.sleep(200)
+        }
+        assertTrue(done, "recheck verification should resolve within timeout")
     }
 
     private fun waitDone(taskId: Long) {
@@ -2086,49 +2334,65 @@ class M7RemediationIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
+> 说明：
+> - `requestId = "recheck-f<findingId>"` 定位复扫任务：finding id 全局自增唯一，故该 requestId 在共享 Testcontainers 容器内跨测试唯一。
+> - 两个 `@Test` 共享静态 `StubM7.findings`：JUnit 默认顺序执行，每个测试的 `setupFinding` 先重置为 `listOf(raw)`，recheck 前再改写，互不串扰。
+> - `markFixed`/`status` 终态守卫在服务层（Task 7.2/7.3）已有单测覆盖；本测试专注端到端闭环。
+> - 若 `ScanTaskRepository.findAll()` 在超大容器数据下较慢，可改 `findByRequestId`（本测试用 `findAll().first{}` 保持对仓储接口零改动；如需性能，可在 Task 6.2 的 FindingRepository 之外给 ScanTaskRepository 补 `findByRequestId`，实现者可自行裁决并 ledger）。
+
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :app-server:test --tests "*M7RemediationIntegrationTest*"`
-Expected: 编译失败或断言失败（取决于前序任务是否完成）。
+Expected: 编译失败或断言失败（`RemediationService` 三参构造/`requestRecheck`/`FindingView.engine` 缺失）——取决于前序任务是否已完成。
 
 - [ ] **Step 3: 运行确认通过**
 
 Run: `./gradlew :app-server:test --tests "*M7RemediationIntegrationTest*"`
-Expected: PASS。
+Expected: PASS（2 个测试，双场景）。
 
 - [ ] **Step 4: 全量回归**
 
 Run: `./gradlew build`
-Expected: BUILD SUCCESSFUL（含 frozen 全部绿）。
+Expected: BUILD SUCCESSFUL（含 frozen ScanPipeline/ReportApi/FindingRepository/M6 全部绿）。
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add app-server/src/test/kotlin/com/example/compliance/remediation/M7RemediationIntegrationTest.kt
-git commit -m "test(remediation): M7 closed-loop integration - assign, fix, recheck, verify regression"
+git commit -m "test(remediation): M7 recheck close-loop integration - absent closes, present regresses"
 ```
 
-> **M7 完成标准**：remediation 模块带实体/迁移/服务/API；状态权威始终在 finding（P2-D4）；recheck 状态机守卫正确；复扫验证闭环（verifyRechecking）贯通；`./gradlew build` 全绿。
+> **M7 完成标准**：整改任务实体/迁移/服务/API 落地；finding 中心端点与终态转移（reason+evidence）守卫；recheck 建复扫任务并闭环验证（absent→CLOSED / present→CONFIRMED）；`./gradlew build` 全绿。
 
 ---
-## M8 — 真实引擎接入（五方法 Adapter 契约 + GitCheckout + Semgrep 落地）
+## M8 — 真实引擎路径
 
-> **契约演进（P2-D8）**：`ScanEngineAdapter` 从单方法 `scan(context): ScanResult` 演进为五阶段方法，全部带默认实现（适配器只需覆盖必要阶段），`ScanContext` 增 `workDir/commitId/timeoutSeconds/paramsJson`。STUB 集成测试（ScanPipeline/ReportApi）按 plan ruling 更新为五方法形态。GitCheckout 归编排器（P2-D6），按 `app.scan.checkout-engines` 配置门控。
+> **模块落地说明**：M8 演进 `ScanEngineAdapter` 为五方法契约（spec §5.1，P2-D8 逐字，全部带默认实现），并新增 module-scan 的 `GitCheckout`（spec §5.2）。**关键兼容裁决（ledger 细化）**：接口保留 `scan(context): ScanResult` 兼容默认方法（内部跑五阶段管线）——冻结的 `ScanPipelineIntegrationTest`/`ReportApiIntegrationTest` 只 override `scan()`，接口演进后仍可编译，**零修改**。
 
-### Task 8.1: 五方法 Adapter 契约 + ScanContext 扩展
+### Task 8.1: ScanEngineAdapter 五方法契约（§5.1 逐字）+ scan() 兼容默认
 
 **Files:**
-- Modify: `module-result/src/main/kotlin/com/example/compliance/result/engine/ScanEngineAdapter.kt`（全文件替换）
-- Modify: `module-result/src/main/kotlin/com/example/compliance/result/engine/ScanContext.kt`（+4 字段）
+- Modify（全文件替换）: `module-result/src/main/kotlin/com/example/compliance/result/engine/ScanEngineAdapter.kt`
 - Create: `module-result/src/test/kotlin/com/example/compliance/result/engine/DefaultAdapterBehaviorsTest.kt`
-- Modify: `app-server/src/test/kotlin/com/example/compliance/scan/ScanPipelineIntegrationTest.kt`（STUB 五方法化，frozen 解冻）
-- Modify: `app-server/src/test/kotlin/com/example/compliance/report/ReportApiIntegrationTest.kt`（STUB 五方法化，frozen 解冻）
 
 **Interfaces:**
-- Consumes: 现有 `ScanResult`/`RawFinding`。
-- Produces: 新 `ScanEngineAdapter`（`val engine: String` + 六方法全默认实现）；`ScanContext` 增字段；`ScanContext` 既有的 `scanTaskId/projectId/repoUrl/ref/configJson` 保留。
+- Consumes: 既有 `RawFinding`/`ScanResult`（本文件保留原样）。
+- Produces（spec §5.1 逐字）:
+  ```kotlin
+  interface ScanEngineAdapter {
+      val engine: String
+      fun supports(engineType: String): Boolean = engineType.equals(engine, ignoreCase = true)
+      fun prepareScan(context: ScanContext) {}
+      fun executeScan(context: ScanContext): ScanExecutionResult = ScanExecutionResult(success = true)
+      fun collectResult(context: ScanContext): List<RawFinding> = emptyList()
+      fun normalizeResult(context: ScanContext, raw: List<RawFinding>): List<RawFinding> = raw
+      fun cleanup(context: ScanContext) {}
+  }
+  ```
+- Produces: `ScanExecutionResult(success, errorMessage, durationMs, stdoutRef?)`；`ScanContext` 9 字段（scanTaskId, projectId, repoUrl, ref=null, workDir=null, commitId=null, timeoutSeconds=null, paramsJson=null, configJson=null）——旧 4 位置参调用（编排器 `ScanContext(task.id, projectId, repo.gitUrl, task.ref)`）因其余字段带默认值仍编译。
+- 兼容裁决：新增 `fun scan(context: ScanContext): ScanResult` 默认方法（跑五阶段管线 + cleanup finally）——冻结 STUB 测试零修改；M8 新 STUBM8 直接用五方法形态。
 
-- [ ] **Step 1: 写失败测试（默认实现行为）**
+- [ ] **Step 1: 写失败测试（默认行为 + 五阶段聚合）**
 
 创建 `module-result/src/test/kotlin/com/example/compliance/result/engine/DefaultAdapterBehaviorsTest.kt`：
 
@@ -2137,29 +2401,58 @@ package com.example.compliance.result.engine
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
-/** P2-D8：默认实现让适配器只覆盖必要阶段；本测试锁定默认行为。 */
+/** M8：spec §5.1 五方法契约默认行为（P2-D8）——未覆写方法有确定性默认值；scan() 兼容默认跑五阶段管线。 */
 class DefaultAdapterBehaviorsTest {
 
-    private val adapter = object : ScanEngineAdapter { override val engine = "TEST-DEFAULT" }
+    private class NoopAdapter(override val engine: String = "NOOP") : ScanEngineAdapter
 
     @Test
-    fun `default pipeline returns empty result without failure`() {
-        val ctx = ScanContext(1L, 2L, "https://git.example.com/r.git", "main")
-        val prep = adapter.prepareScan(ctx)
-        val exec = adapter.executeScan(ctx, prep)
-        val raw = adapter.collectResult(ctx, exec)
-        val result = adapter.normalizeResult(ctx, raw)
-        assertEquals(0, result.findings.size)
-        assertEquals(true, result.success)
+    fun `supports is case-insensitive`() {
+        val adapter = NoopAdapter("semgrep")
+        assertTrue(adapter.supports("SEMGREP"))
+        assertTrue(adapter.supports("SemGrep"))
+        assertFalse(adapter.supports("trivy"))
     }
 
     @Test
-    fun `cleanup is a no-op`() {
-        val ctx = ScanContext(1L, 2L, "https://git.example.com/r.git", "main")
-        val prep = adapter.prepareScan(ctx)
-        adapter.cleanup(ctx, prep)   // 不得抛异常
+    fun `default scan returns empty success`() {
+        val result = NoopAdapter().scan(ScanContext(1L, 1L, "https://x.git", "main"))
+        assertTrue(result.success)
+        assertEquals(0, result.findings.size)
+    }
+
+    @Test
+    fun `executeScan defaults to success and normalizeResult is identity`() {
+        val adapter = NoopAdapter()
+        val ctx = ScanContext(1L, 1L, "https://x.git")
+        assertTrue(adapter.executeScan(ctx).success)
+        val raw = listOf(RawFinding("r1", "n", "A.java", 1, "HIGH"))
+        assertEquals(raw, adapter.normalizeResult(ctx, raw))
+        adapter.cleanup(ctx)   // 不抛异常即通过
+    }
+
+    @Test
+    fun `scan default runs overridden five-stage methods and aggregates`() {
+        var prepared = false
+        var cleaned = false
+        val adapter = object : ScanEngineAdapter {
+            override val engine = "FIVESTAGE"
+            override fun prepareScan(context: ScanContext) { prepared = true }
+            override fun executeScan(context: ScanContext) = ScanExecutionResult(success = true, durationMs = 7)
+            override fun collectResult(context: ScanContext) = listOf(RawFinding("r1", "n", "A.java", 1, "INFO"))
+            override fun normalizeResult(context: ScanContext, raw: List<RawFinding>) = raw.map { it.copy(severity = "HIGH") }
+            override fun cleanup(context: ScanContext) { cleaned = true }
+        }
+
+        val result = adapter.scan(ScanContext(1L, 1L, "https://x.git"))
+
+        assertTrue(prepared)
+        assertTrue(cleaned)
+        assertEquals("HIGH", result.findings.single().severity)
+        assertEquals(7, result.durationMs)
     }
 }
 ```
@@ -2167,160 +2460,113 @@ class DefaultAdapterBehaviorsTest {
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :module-result:test --tests "*DefaultAdapterBehaviorsTest*"`
-Expected: 编译失败 — 五方法未定义。
+Expected: 编译失败 — `supports`/`ScanExecutionResult` 未定义，`ScanContext` 构造不齐。
 
-- [ ] **Step 3: 实现契约**
-
-`ScanContext.kt` 全文件替换：
+- [ ] **Step 3: 全文件替换 ScanEngineAdapter.kt**
 
 ```kotlin
 package com.example.compliance.result.engine
 
-/** 单次扫描的执行上下文。M8 起含工作目录/commit/超时/参数。 */
+/** 扫描引擎统一端口（spec §5.1，P2-D8）：五方法契约全部带默认实现，现有实现零改动兼容。 */
+interface ScanEngineAdapter {
+    val engine: String
+
+    fun supports(engineType: String): Boolean = engineType.equals(engine, ignoreCase = true)
+
+    fun prepareScan(context: ScanContext) {}
+    fun executeScan(context: ScanContext): ScanExecutionResult = ScanExecutionResult(success = true)
+    fun collectResult(context: ScanContext): List<RawFinding> = emptyList()
+    fun normalizeResult(context: ScanContext, raw: List<RawFinding>): List<RawFinding> = raw
+    fun cleanup(context: ScanContext) {}
+
+    /** 兼容默认方法：跑五阶段管线并聚合为旧 ScanResult（冻结 STUB 测试 override scan() 时零改动；编排器 M8 直接调用五阶段）。 */
+    fun scan(context: ScanContext): ScanResult {
+        prepareScan(context)
+        try {
+            val execution = executeScan(context)
+            val raw = collectResult(context)
+            val normalized = normalizeResult(context, raw)
+            return ScanResult(normalized, success = execution.success, errorMessage = execution.errorMessage, durationMs = execution.durationMs)
+        } finally {
+            cleanup(context)
+        }
+    }
+}
+
+/** 引擎执行结果；stdoutRef 指向引擎原始输出落盘位置（collectResult 读取，spec §5.1）。 */
+data class ScanExecutionResult(
+    val success: Boolean,
+    val errorMessage: String? = null,
+    val durationMs: Long? = null,
+    val stdoutRef: String? = null,
+)
+
 data class ScanContext(
     val scanTaskId: Long,
     val projectId: Long,
     val repoUrl: String,
-    val ref: String?,
-    val configJson: String? = null,
-    val workDir: String? = null,
+    val ref: String? = null,
+    val workDir: String? = null,        // 编排器检出的本地目录（§5.2），SemgrepAdapter 优先作为扫描目标
     val commitId: String? = null,
-    val timeoutSeconds: Long = 300,
-    val paramsJson: String? = null,
+    val timeoutSeconds: Long? = null,
+    val paramsJson: String? = null,     // rule_engine_binding.parameters
+    val configJson: String? = null,     // 兼容保留
 )
 ```
 
-`ScanEngineAdapter.kt` 全文件替换：
-
-```kotlin
-package com.example.compliance.result.engine
-
-/** 扫描执行准备：适配器在 prepare 阶段产出，execute/collect 消费，cleanup 释放。 */
-interface ScanPreparation { val workDir: String? }
-
-/** 扫描执行句柄：executeScan 产出，collectResult 消费。 */
-interface ScanExecution
-
-/** 引擎原始输出：normalizeResult 消费，转成 ScanResult。 */
-interface RawScanOutput
-
-/**
- * 五阶段扫描适配器契约（P2-D8）。全部阶段带默认实现——适配器只覆盖自身需要的阶段；
- * 默认实现返回空结果，保证未覆盖阶段的适配器可空转（用于测试/桩）。
- */
-interface ScanEngineAdapter {
-    val engine: String
-
-    /** 是否支持该引擎（默认按 engine 名匹配）。 */
-    fun supports(engine: String): Boolean = this.engine == engine
-
-    /** 准备：创建/解析工作目录等。 */
-    fun prepareScan(context: ScanContext): ScanPreparation = ScanPreparation { context.workDir }
-
-    /** 执行：运行扫描器，产出句柄。 */
-    fun executeScan(context: ScanContext, preparation: ScanPreparation): ScanExecution = object : ScanExecution {}
-
-    /** 收集：读执行输出（文件/标准输出）。 */
-    fun collectResult(context: ScanContext, execution: ScanExecution): RawScanOutput = object : RawScanOutput {}
-
-    /** 归一化：原始输出 → ScanResult（severity 映射、过滤在此阶段）。 */
-    fun normalizeResult(context: ScanContext, raw: RawScanOutput): ScanResult = ScanResult(emptyList(), true)
-
-    /** 清理：释放临时资源（幂等）。 */
-    fun cleanup(context: ScanContext, preparation: ScanPreparation) {}
-
-    /** 向后兼容：旧单方法适配器仍可用——默认管线跑一遍（prepare→execute→collect→normalize）。 */
-    fun scan(context: ScanContext): ScanResult {
-        val prep = prepareScan(context)
-        val exec = executeScan(context, prep)
-        val raw = collectResult(context, exec)
-        val result = normalizeResult(context, raw)
-        cleanup(context, prep)
-        return result
-    }
-}
-```
-
-`ScanResult`/`RawFinding` 保持既有定义（`ScanResult(findings, success, errorMessage?)`；`RawFinding(engineRuleId, ruleName, filePath, line, severity, category?, message?, codeSnippet?)`），不做改动。
+`RawFinding` 与 `ScanResult` 保持原样不动。
 
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `./gradlew :module-result:test --tests "*DefaultAdapterBehaviorsTest*"`
-Expected: PASS。
+Expected: PASS（4 个测试）。
 
-- [ ] **Step 5: 解冻 STUB 集成测试（五方法化）**
-
-`ScanPipelineIntegrationTest.kt` 的 STUB 适配器从：
-
-```kotlin
-        @Bean
-        fun stubAdapter(): ScanEngineAdapter = object : ScanEngineAdapter {
-            override val engine = "STUB"
-            override fun scan(context: ScanContext): ScanResult = ScanResult(
-                findings = listOf(RawFinding("stub-rule-sqli", "STUB", "src/main/java/A.java", 1, "HIGH", "sqli", "msg", "x"))
-            )
-        }
-```
-
-改为：
-
-```kotlin
-        @Bean
-        fun stubAdapter(): ScanEngineAdapter = object : ScanEngineAdapter {
-            override val engine = "STUB"
-            override fun prepareScan(context: ScanContext): ScanPreparation = ScanPreparation { context.workDir ?: "tmp" }
-            override fun executeScan(context: ScanContext, preparation: ScanPreparation): ScanExecution = object : ScanExecution {}
-            override fun collectResult(context: ScanContext, execution: ScanExecution): RawScanOutput = object : RawScanOutput {}
-            override fun normalizeResult(context: ScanContext, raw: RawScanOutput): ScanResult = ScanResult(
-                findings = listOf(RawFinding("stub-rule-sqli", "STUB", "src/main/java/A.java", 1, "HIGH", "sqli", "msg", "x"))
-            )
-        }
-```
-
-`ReportApiIntegrationTest.kt` 的 STUB 适配器同样改（该测试 stub 规则/引擎以该文件现有 `engine`/`ruleCode` 为准，仅把单方法改成五方法 + normalizeResult 返回其原 findings）。
-
-> **plan ruling（解冻依据）**：frozen 仅保护既有断言与测试语义，不保护测试内部实现形态；五方法契约是 spec P2-D8 的强制演进，2 个集成测试的 STUB 适配器属于被演进接口的实现，必须同步。断言值（finding 数、severity 分布、报表口径）一律不变。
-
-- [ ] **Step 6: 全量回归**
+- [ ] **Step 5: 全量回归（冻结零修改验证）**
 
 Run: `./gradlew build`
-Expected: BUILD SUCCESSFUL（含两个解冻 STUB 后的集成测试全绿）。
+Expected: BUILD SUCCESSFUL——`ScanPipelineIntegrationTest`/`ReportApiIntegrationTest` 的 STUB 只 override `scan()`，新接口把 `scan()` 变为默认方法，override 仍编译，**零修改**（ledger 细化裁决）。`SemgrepAdapter` 现 override `scan()`，同样编译通过（Task 8.3 改为五方法形态）。
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add module-result/src/main/kotlin/com/example/compliance/result/engine module-result/src/test/kotlin/com/example/compliance/result/engine/DefaultAdapterBehaviorsTest.kt app-server/src/test/kotlin/com/example/compliance/scan/ScanPipelineIntegrationTest.kt app-server/src/test/kotlin/com/example/compliance/report/ReportApiIntegrationTest.kt
-git commit -m "feat(result): five-stage engine adapter contract with default implementations, extend ScanContext"
+git add module-result/src/main/kotlin/com/example/compliance/result/engine/ScanEngineAdapter.kt module-result/src/test/kotlin/com/example/compliance/result/engine/DefaultAdapterBehaviorsTest.kt
+git commit -m "feat(result): five-method engine adapter contract with compatible scan() default (P2-D8)"
 ```
 
 ---
 
-### Task 8.2: GitCheckout（编排器层，配置门控）
+### Task 8.2: GitCheckout（module-scan）+ ProcessRunner + checkout-engines 配置
 
 **Files:**
-- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/application/GitCheckout.kt`
-- Modify: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanOrchestrator.kt`（接 GitCheckout）
-- Create: `module-scan/src/test/kotlin/com/example/compliance/scan/application/GitCheckoutTest.kt`
-- Create: `module-scan/src/test/resources/application-test.properties`（或修改既有测试配置，加 checkout-engines 属性）
-- Modify: `app-server/src/main/resources/application.yml`（`app.scan.checkout-engines` 默认值）
+- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/checkout/GitCheckout.kt`（接口 + CheckoutResult）
+- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/checkout/ProcessRunner.kt`（接口 + ProcessOutput）
+- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/checkout/CommandGitCheckout.kt`（真实实现）
+- Create: `module-scan/src/test/kotlin/com/example/compliance/scan/checkout/GitCheckoutTest.kt`
+- Modify: `app-server/src/main/resources/application.yml`（+`app.scan.checkout-engines: SEMGREP`）
 
 **Interfaces:**
-- Consumes: `ScanContext`（Task 8.1 扩展）。
-- Produces: `GitCheckout`（`@Component`）：
-  - `fun checkout(engine: String, repoUrl: String, ref: String?, workDir: String): String?` —— 按 `app.scan.checkout-engines`（逗号分隔）门控：引擎不在名单 → 返回 null（跳过 clone）；在名单 → `git clone --depth 1 [-b ref] repoUrl workDir` + `git -C workDir rev-parse HEAD` 返回 commitId；clone 失败抛 `BusinessException(500, ...)`。
-  - `fun cleanup(workDir: String)` —— 递归删除（幂等，不存在即返回）。
-  - 可注入 `WorkDirProvider`（默认 `java.nio.file.Files.createTempDirectory("scan-")`）便于测试。
+- Consumes: 无（独立组件）。`@Value("${app.scan.checkout-engines}")` 由 Task 8.4 编排器消费，本任务只落配置键。
+- Produces（spec §5.2 逐字 + cleanup）:
+  ```kotlin
+  data class CheckoutResult(val workDir: String, val commitId: String?)
+  interface GitCheckout {
+      fun checkout(repoUrl: String, ref: String?): CheckoutResult
+      fun cleanup(workDir: String)
+  }
+  interface ProcessRunner { fun run(command: List<String>, dir: String? = null): ProcessOutput }
+  data class ProcessOutput(val exitCode: Int, val stdout: String)
+  ```
+- `CommandGitCheckout`：本地路径（已存在目录或 `file:` 前缀）→ 跳过 clone，`CheckoutResult(repoUrl, null)`；远程 → `git clone --depth 1 [-b ref] <repoUrl> <temp>` + `git rev-parse HEAD` 回填 commitId；`cleanup` 只删本组件创建的 `scan-checkout-*` 临时目录，绝不触碰用户路径。
 
-- [ ] **Step 1: 写失败测试（门控 + commitId）**
+- [ ] **Step 1: 写失败测试**
 
-创建 `module-scan/src/test/kotlin/com/example/compliance/scan/application/GitCheckoutTest.kt`：
+创建 `module-scan/src/test/kotlin/com/example/compliance/scan/checkout/GitCheckoutTest.kt`：
 
 ```kotlin
-package com.example.compliance.scan.application
+package com.example.compliance.scan.checkout
 
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.verify
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -2328,130 +2574,171 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** M8：GitCheckout 门控与 commit 回填（STUB 引擎跳过 clone）。 */
+/** M8：GitCheckout 本地跳过 / 远程 clone+rev-parse / cleanup 只删自建临时目录。 */
 class GitCheckoutTest {
 
     private val processRunner = mockk<ProcessRunner>()
-    @TempDir lateinit var tmp: Path
+    private val checkout = CommandGitCheckout(processRunner)
+
+    @TempDir
+    lateinit var tempDir: Path
 
     @Test
-    fun `engine not in checkout list skips clone and returns null`() {
-        val checkout = GitCheckout(processRunner, setOf("SEMGREP"))
-        val commit = checkout.checkout("STUB", "https://git.example.com/r.git", "main", tmp.resolve("w").toString())
-        assertNull(commit)
-        verify(exactly = 0) { processRunner.run(any(), any(), any(), any()) }
+    fun `local path skips clone`() {
+        val result = checkout.checkout(tempDir.toString(), "main")
+        assertEquals(tempDir.toString(), result.workDir)
+        assertNull(result.commitId)
     }
 
     @Test
-    fun `engine in list clones and reads HEAD`() {
-        every { processRunner.run(any(), any(), any(), any()) } returns 0
-        every { processRunner.capture(any()) } returns "abc123def\n"
-        val checkout = GitCheckout(processRunner, setOf("SEMGREP", "STUB"))
-        val commit = checkout.checkout("STUB", "https://git.example.com/r.git", "main", tmp.resolve("w").toString())
-        assertEquals("abc123def", commit)
-        verify { processRunner.run(any(), any(), any(), any()) }
+    fun `remote clone succeeds and returns commit id`() {
+        every { processRunner.run(match { it.contains("clone") }, any()) } returns ProcessOutput(0, "")
+        every { processRunner.run(match { it.contains("rev-parse") }, any()) } returns ProcessOutput(0, "abc123def\n")
+
+        val result = checkout.checkout("https://git.example.com/a.git", "main")
+
+        assertEquals("abc123def", result.commitId)
+        assertTrue(result.workDir.contains("scan-checkout-"), "workDir should be a self-created temp dir")
+    }
+
+    @Test
+    fun `clone failure throws and cleans temp dir`() {
+        every { processRunner.run(match { it.contains("clone") }, any()) } returns ProcessOutput(128, "fatal: could not read Username")
+        org.junit.jupiter.api.assertThrows<IllegalStateException> {
+            checkout.checkout("https://git.example.com/a.git", "main")
+        }
+    }
+
+    @Test
+    fun `cleanup deletes only self-created temp dir`() {
+        val self = java.nio.file.Files.createTempDirectory("scan-checkout-clean")
+        checkout.cleanup(self.toString())
+        assertTrue(!java.nio.file.Files.exists(self))
+        // 用户路径绝不被删
+        checkout.cleanup(tempDir.toString())
+        assertTrue(java.nio.file.Files.exists(tempDir))
     }
 }
 ```
 
-> `ProcessRunner` 是本任务为可测性引入的薄抽象（`fun run(command: List<String>, workDir: String?, env: Map<String,String>?, timeoutSeconds: Long): Int` + `fun capture(command: List<String>): String`），`GitCheckout` 用它执行 git；生产实现注入真实 `java.lang.ProcessBuilder` 封装（`SystemProcessRunner`，同文件新建）。若不想引入抽象，也可用 `Files.createTempFile` 方案——**以可测性为先，保留 ProcessRunner 抽象**。
+> `ProcessRunner.run(command: List<String>, dir: String? = null)` 用 `List` 参数（非 vararg）便于 mockk 匹配；真实实现用 `ProcessBuilder(command).directory(...).redirectErrorStream(true)` 执行并读 stdout。
 
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :module-scan:test --tests "*GitCheckoutTest*"`
-Expected: 编译失败 — `GitCheckout`/`ProcessRunner` 不存在。
+Expected: 编译失败 — `GitCheckout`/`ProcessRunner`/`CommandGitCheckout` 不存在。
 
-- [ ] **Step 3: 实现 GitCheckout**
+- [ ] **Step 3: 实现接口与真实实现**
 
-创建 `module-scan/src/main/kotlin/com/example/compliance/scan/application/GitCheckout.kt`：
+`GitCheckout.kt`：
 
 ```kotlin
-package com.example.compliance.scan.application
+package com.example.compliance.scan.checkout
 
-import com.example.compliance.common.exception.BusinessException
-import org.springframework.beans.factory.annotation.Value
+/** 检出结果：workDir 为可扫描的本地目录；commitId 为检出 commit（本地/STUB 跳过 clone 时为 null）。 */
+data class CheckoutResult(val workDir: String, val commitId: String?)
+
+/** 引擎无关的代码检出（spec §5.2）：编排器负责调用，adapter 只消费 ScanContext.workDir。 */
+interface GitCheckout {
+    fun checkout(repoUrl: String, ref: String?): CheckoutResult
+    fun cleanup(workDir: String)
+}
+```
+
+`ProcessRunner.kt`：
+
+```kotlin
+package com.example.compliance.scan.checkout
+
+data class ProcessOutput(val exitCode: Int, val stdout: String)
+
+/** 进程执行抽象：真实实现走 ProcessBuilder；测试可 mock 模拟 git 输出。 */
+interface ProcessRunner {
+    fun run(command: List<String>, dir: String? = null): ProcessOutput
+}
+```
+
+`CommandGitCheckout.kt`：
+
+```kotlin
+package com.example.compliance.scan.checkout
+
 import org.springframework.stereotype.Component
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 
-/** 进程执行抽象（可测试性：单元测试用 mock 替换真实进程）。 */
-interface ProcessRunner {
-    fun run(command: List<String>, workDir: String?, env: Map<String, String>?, timeoutSeconds: Long): Int
-    fun capture(command: List<String>): String
-}
-
-/** 真实进程执行器。 */
 @Component
-class SystemProcessRunner : ProcessRunner {
-    override fun run(command: List<String>, workDir: String?, env: Map<String, String>?, timeoutSeconds: Long): Int {
-        val pb = ProcessBuilder(command)
-        if (workDir != null) pb.directory(Path.of(workDir).toFile())
-        if (env != null) pb.environment().putAll(env)
-        val p = pb.start()
-        p.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-        return p.exitValue()
-    }
-
-    override fun capture(command: List<String>): String {
-        val p = ProcessBuilder(command).redirectErrorStream(true).start()
-        return p.inputStream.bufferedReader().readText().trim()
-    }
-}
-
-/** 编排器层的 Git 检出（P2-D6）：按 app.scan.checkout-engines 门控，回填 commitId，finally 清理。 */
-@Component
-class GitCheckout(
+class CommandGitCheckout(
     private val processRunner: ProcessRunner,
-    @Value("\${app.scan.checkout-engines:SEMGREP}") checkoutEngines: String,
-) {
-    private val enabled = checkoutEngines.split(",").map { it.trim().uppercase() }.toSet()
+) : GitCheckout {
 
-    /** 检出到 workDir；引擎不在门控名单返回 null（跳过 clone，STUB 测试不触网）。 */
-    fun checkout(engine: String, repoUrl: String, ref: String?, workDir: String): String? {
-        if (engine.uppercase() !in enabled) return null
-        val dir = Path.of(workDir)
-        Files.createDirectories(dir)
-        val cmd = mutableListOf("git", "clone", "--depth", "1")
-        if (!ref.isNullOrBlank()) cmd += listOf("-b", ref)
-        cmd += listOf(repoUrl, workDir)
-        val exit = processRunner.run(cmd, null, null, 300)
-        if (exit != 0) throw BusinessException(500, "git clone failed for $repoUrl (exit=$exit)")
-        return processRunner.capture(listOf("git", "-C", workDir, "rev-parse", "HEAD")).take(64)
+    /** 本地路径（已存在目录或 file:）→ 跳过 clone；远程 → clone 到自建临时目录并回填 commitId。 */
+    override fun checkout(repoUrl: String, ref: String?): CheckoutResult {
+        if (isLocal(repoUrl)) return CheckoutResult(repoUrl, null)
+        val target = Files.createTempDirectory("scan-checkout-").toString()
+        val command = buildList {
+            add("git"); add("clone"); add("--depth"); add("1")
+            if (!ref.isNullOrBlank()) { add("-b"); add(ref) }
+            add(repoUrl); add(target)
+        }
+        val clone = processRunner.run(command)
+        if (clone.exitCode != 0) {
+            cleanup(target)
+            throw IllegalStateException("git clone failed: ${clone.stdout.take(500)}")
+        }
+        val rev = processRunner.run(listOf("git", "-C", target, "rev-parse", "HEAD"))
+        val commitId = if (rev.exitCode == 0) rev.stdout.trim().takeIf { it.isNotBlank() } else null
+        return CheckoutResult(target, commitId)
     }
 
-    /** 递归清理（幂等）。 */
-    fun cleanup(workDir: String) {
-        runCatching {
-            val dir = Path.of(workDir)
-            if (Files.exists(dir)) Files.walk(dir).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+    /** 只删本组件创建的 scan-checkout-* 临时目录；用户路径 no-op。 */
+    override fun cleanup(workDir: String) {
+        val path = Paths.get(workDir)
+        if (path.fileName?.toString()?.startsWith("scan-checkout-") == true) {
+            deleteRecursively(path)
         }
     }
+
+    private fun isLocal(repoUrl: String): Boolean =
+        repoUrl.startsWith("file:") || Files.isDirectory(Paths.get(repoUrl))
+
+    private fun deleteRecursively(path: Path) {
+        if (!Files.exists(path)) return
+        Files.walk(path).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+    }
+}
+
+/** 真实进程执行器（ProcessBuilder）。 */
+@Component
+class SystemProcessRunner : ProcessRunner {
+    override fun run(command: List<String>, dir: String?): ProcessOutput {
+        val pb = ProcessBuilder(command)
+        if (dir != null) pb.directory(Paths.get(dir).toFile())
+        pb.redirectErrorStream(true)
+        val p = pb.start()
+        val stdout = p.inputStream.bufferedReader().readText()
+        val exit = p.waitFor(120, TimeUnit.SECONDS)
+        val code = if (exit) p.exitValue() else { p.destroyForcibly(); -1 }
+        return ProcessOutput(code, stdout)
+    }
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [ ] **Step 4: 配置键**
 
-Run: `./gradlew :module-scan:test --tests "*GitCheckoutTest*"`
-Expected: PASS。
-
-- [ ] **Step 5: 应用配置**
-
-`app-server/src/main/resources/application.yml` 追加：
+`application.yml` 的 `app:` 段追加：
 
 ```yaml
-app:
   scan:
-    checkout-engines: SEMGREP
+    checkout-engines: SEMGREP   # 仅这些引擎在编排器侧触发 GitCheckout；STUB 等跳过（Task 8.4 消费）
 ```
 
-`module-scan` 测试资源（`module-scan/src/test/resources/application-test.properties` 若存在则追加，否则新建）：
+- [ ] **Step 5: 运行测试确认通过**
 
-```properties
-app.scan.checkout-engines=
-```
-
-（空名单 → 所有引擎跳过 clone，集成测试不触网。）
+Run: `./gradlew :module-scan:test --tests "*GitCheckoutTest*"`
+Expected: PASS（4 个测试）。
 
 - [ ] **Step 6: 全量回归**
 
@@ -2461,176 +2748,215 @@ Expected: BUILD SUCCESSFUL。
 - [ ] **Step 7: Commit**
 
 ```bash
-git add module-scan/src/main/kotlin/com/example/compliance/scan/application module-scan/src/test app-server/src/main/resources/application.yml
-git commit -m "feat(scan): orchestrator-side git checkout gated by engine list with commit backfill"
+git add module-scan/src/main/kotlin/com/example/compliance/scan/checkout module-scan/src/test/kotlin/com/example/compliance/scan/checkout app-server/src/main/resources/application.yml
+git commit -m "feat(scan): engine-agnostic git checkout with process runner and checkout-engines config"
 ```
 
+> **M8 前段完成标准**：五方法契约落地 + scan() 兼容（冻结零修改）；GitCheckout 组件可测（本地跳过/远程 clone/cleanup 自建目录）。Task 8.3 改 SemgrepAdapter 五方法化；Task 8.4 编排器五阶段管线 + 门控 checkout + PREPARING。
+
 ---
-### Task 8.3: SemgrepAdapter 五方法化（severity 映射入 normalizeResult）
+### Task 8.3: SemgrepAdapter 五方法化（module-engine-adapter 真实路径）
 
 **Files:**
-- Modify: `module-result/src/main/kotlin/com/example/compliance/result/engine/SemgrepAdapter.kt`（全文件替换）
-- Modify: `module-result/src/main/kotlin/com/example/compliance/result/engine/SemgrepCli.kt`（按需保留，产出 RawScanOutput）
-- Create: `module-result/src/test/kotlin/com/example/compliance/result/engine/SemgrepAdapterTest.kt`
+- Modify（全文件替换）: `module-engine-adapter/src/main/kotlin/com/example/compliance/engineadapter/semgrep/SemgrepAdapter.kt`
+- Modify（全文件替换）: `module-engine-adapter/src/test/kotlin/com/example/compliance/engineadapter/semgrep/SemgrepAdapterTest.kt`
 
 **Interfaces:**
-- Consumes: Task 8.1 五方法契约 + `ScanContext.workDir`；`SemgrepCli` 既有能力（`run(repoDir, configJson): SemgrepOutput`）。
-- Produces: `SemgrepAdapter` 覆盖 `supports/prepareScan/executeScan/collectResult/normalizeResult/cleanup`；`normalizeResult` 内做 severity 映射（`ERROR→HIGH`、`WARNING→MEDIUM`、`INFO→LOW`，映射表以既有 `SemgrepAdapter` 的 severity 归一为准）与规则 id 过滤；`RawScanOutput` 实现类承载 CLI 输出（outputRef 传 CLI 输出的文件路径/内容）。
+- Consumes: Task 8.1 `ScanEngineAdapter` 五方法契约（`ScanExecutionResult`/`ScanContext` 9 字段）；既有 `SemgrepCli.run(targetPath, ref): String`（超时+临时重定向已具备，spec §5.2 不改）、`SemgrepResultParser.parse(stdout): List<RawFinding>`、`SemgrepSeverityMapper.map(engineSeverity): String`（ERROR→HIGH/WARNING→MEDIUM/INFO→LOW/else→LOW）。
+- Produces: 五方法形态 `SemgrepAdapter`：
+  - `prepareScan` no-op；`executeScan` → `scanTarget(context)` + `cli.run` + stdout 落临时文件 + `ScanExecutionResult(success, stdoutRef)`；
+  - `collectResult` → 读 stdoutRef 文件 + `parser.parse`（**保留原始 severity**）；
+  - `normalizeResult` → `severityMapper.map` 只映射 severity（engineRuleId→平台规则映射留在编排器 `publishedRuleByEngineRuleId`，spec §5.2）；
+  - `cleanup` → 删 executeScan 产生的 stdout 临时文件；
+  - `scanTarget = context.workDir ?: context.repoUrl`（spec §5.2；删除旧 `localPathOf`/configJson.localPath 路径，由 workDir 取代）。
+  - 因 executeScan→collectResult 顺序调用且共享 stdoutRef，用 `@Volatile private var stdoutRef: String?` 实例字段（编排器对同一 adapter 顺序调五阶段，安全）。
 
 - [ ] **Step 1: 写失败测试**
 
-创建 `module-result/src/test/kotlin/com/example/compliance/result/engine/SemgrepAdapterTest.kt`：
+`module-engine-adapter/src/test/kotlin/com/example/compliance/engineadapter/semgrep/SemgrepAdapterTest.kt` 全文件替换为：
 
 ```kotlin
-package com.example.compliance.result.engine
+package com.example.compliance.engineadapter.semgrep
 
+import com.example.compliance.result.engine.RawFinding
+import com.example.compliance.result.engine.ScanContext
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Test
+import java.nio.charset.StandardCharsets
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
-/** M8：Semgrep 适配器五阶段化后 normalize 行为不变（severity 映射 + 规则过滤）。 */
+/** M8：SemgrepAdapter 五方法化——execute/collect/normalize/cleanup 职责分离。 */
 class SemgrepAdapterTest {
-
     private val cli = mockk<SemgrepCli>()
+    private val adapter = SemgrepAdapter(cli, SemgrepResultParser(), SemgrepSeverityMapper())
+
+    private val json = javaClass.getResource("/semgrep/basic.json").readText(StandardCharsets.UTF_8)
+    private val ctx = ScanContext(1L, 1L, "https://git.example.com/repo.git", "main")
 
     @Test
-    fun `normalize maps severities and drops unmapped rules`() {
-        val adapter = SemgrepAdapter(cli)
-        val raw = object : RawScanOutput {
-            val findings = listOf(
-                SemgrepFinding("rule-a", "A", "x.java", 1, "ERROR", "m", "x;"),
-                SemgrepFinding("rule-b", "B", "y.java", 2, "INFO", "m", "y;"),
-                SemgrepFinding("unmapped", "U", "z.java", 3, "ERROR", "m", "z;"),
-            )
-            val ruleMap = mapOf("rule-a" to "R1", "rule-b" to "R2")
-        }
+    fun `execute and collect keep raw severities, normalize maps them`() {
+        every { cli.run(any(), any()) } returns json
 
-        val result = adapter.normalizeResult(ScanContext(1L, 2L, "u", "main"), raw as RawScanOutput)
+        val execution = adapter.executeScan(ctx)
+        assertTrue(execution.success)
+        assertTrue(execution.stdoutRef != null, "stdoutRef should point at persisted output")
 
-        // rule-a → HIGH；rule-b → LOW；unmapped 被过滤
+        val raw = adapter.collectResult(ctx)
+        assertEquals(2, raw.size)
+        assertEquals("ERROR", raw[0].severity)   // collectResult 保留原始 severity
+        assertEquals("WARNING", raw[1].severity)
+
+        val normalized = adapter.normalizeResult(ctx, raw)
+        assertEquals("HIGH", normalized[0].severity)
+        assertEquals("MEDIUM", normalized[1].severity)
+    }
+
+    @Test
+    fun `normalizeResult maps severity only`() {
+        val normalized = adapter.normalizeResult(
+            ctx,
+            listOf(RawFinding("r1", null, "A.java", 1, "INFO", null, null, null)),
+        )
+        assertEquals("LOW", normalized[0].severity)
+    }
+
+    @Test
+    fun `cleanup clears stdout ref`() {
+        every { cli.run(any(), any()) } returns json
+        adapter.executeScan(ctx)
+        adapter.collectResult(ctx)
+        adapter.cleanup(ctx)
+        assertTrue(adapter.collectResult(ctx).isEmpty(), "after cleanup collectResult returns empty")
+    }
+
+    @Test
+    fun `scan target prefers workDir`() {
+        every { cli.run(any(), any()) } returns json
+        adapter.executeScan(ScanContext(1L, 1L, "https://git.example.com/repo.git", "main", workDir = "/tmp/checkout"))
+        verify { cli.run("/tmp/checkout", "main") }
+    }
+
+    @Test
+    fun `scan default pipeline returns normalized findings`() {
+        every { cli.run(any(), any()) } returns json
+        val result = adapter.scan(ctx)
+        assertTrue(result.success)
         assertEquals(2, result.findings.size)
-        assertEquals("R1", result.findings[0].engineRuleId)
         assertEquals("HIGH", result.findings[0].severity)
-        assertEquals("R2", result.findings[1].engineRuleId)
-        assertEquals("LOW", result.findings[1].severity)
+    }
+
+    @Test
+    fun `engine name is SEMGREP`() {
+        assertEquals("SEMGREP", adapter.engine)
     }
 }
 ```
-
-> `SemgrepFinding`/`ruleMap` 是测试内的原始输出结构。实现时 `SemgrepAdapter` 的 `collectResult` 返回一个 `RawScanOutput` 实现（承载 CLI 输出 + 规则映射），`normalizeResult` 从其中读 `findings` 与 `ruleMap`。若既有 `SemgrepCli` 已产出含规则映射的结构，直接复用之。**测试中的字段名以实现为准调整，但断言语义（映射 + 过滤 + 数量）不变。**
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `./gradlew :module-result:test --tests "*SemgrepAdapterTest*"`
-Expected: 编译失败 — 五方法未实现或测试结构与实现不匹配。
+Run: `./gradlew :module-engine-adapter:test --tests "*SemgrepAdapterTest*"`
+Expected: 编译失败 — `executeScan`/`collectResult`/`normalizeResult` 未覆写，`ScanContext` 新字段缺 workDir。
 
-- [ ] **Step 3: 实现 SemgrepAdapter**
-
-`SemgrepAdapter.kt` 全文件替换：
+- [ ] **Step 3: 全文件替换 SemgrepAdapter.kt**
 
 ```kotlin
-package com.example.compliance.result.engine
+package com.example.compliance.engineadapter.semgrep
 
+import com.example.compliance.result.engine.RawFinding
+import com.example.compliance.result.engine.ScanContext
+import com.example.compliance.result.engine.ScanEngineAdapter
+import com.example.compliance.result.engine.ScanExecutionResult
 import org.springframework.stereotype.Component
+import java.io.File
 
-/** Semgrep CLI 的原始输出（承载 CLI 解析结果 + 引擎规则→平台规则映射）。 */
-class SemgrepRawOutput(
-    val findings: List<SemgrepFinding>,
-    val ruleMap: Map<String, String>,
-) : RawScanOutput
-
-data class SemgrepFinding(
-    val engineRuleId: String,
-    val ruleName: String,
-    val filePath: String,
-    val line: Int,
-    val severity: String,
-    val category: String?,
-    val message: String?,
-    val codeSnippet: String?,
-)
-
-/** Semgrep 适配器（M8 五阶段化）：execute 跑 CLI，normalize 做 severity 映射与规则过滤。 */
 @Component
 class SemgrepAdapter(
     private val cli: SemgrepCli,
+    private val parser: SemgrepResultParser,
+    private val severityMapper: SemgrepSeverityMapper,
 ) : ScanEngineAdapter {
 
-    override val engine = "SEMGREP"
+    override val engine: String = "SEMGREP"
 
-    private val severityMap = mapOf(
-        "ERROR" to "HIGH",
-        "WARNING" to "MEDIUM",
-        "INFO" to "LOW",
-    )
+    /** executeScan 落盘路径：编排器对同一 adapter 顺序调用 executeScan→collectResult→cleanup，实例字段安全（spec §5.1 stdoutRef 语义）。 */
+    @Volatile
+    private var stdoutRef: String? = null
 
-    override fun executeScan(context: ScanContext, preparation: ScanPreparation): ScanExecution {
-        val out = cli.run(context.workDir ?: throw IllegalStateException("workDir required for semgrep"), context.configJson)
-        return object : ScanExecution {}
+    override fun prepareScan(context: ScanContext) {
+        // 无前置动作：超时与临时文件重定向由 SemgrepCli 负责（spec §5.2）
     }
 
-    override fun collectResult(context: ScanContext, execution: ScanExecution): RawScanOutput {
-        // CLI 输出经 cli.run 已落入本适配器；此处转成 RawScanOutput（若 CLI 已产出结构则直接包装）
-        val findings = cli.outputAsFindings()
-        val ruleMap = cli.ruleMap()
-        return SemgrepRawOutput(findings, ruleMap)
+    /** 执行 semgrep，stdout 落盘为临时文件并返回 stdoutRef。 */
+    override fun executeScan(context: ScanContext): ScanExecutionResult {
+        val target = scanTarget(context)
+        val stdout = cli.run(target, context.ref)
+        val file = File.createTempFile("semgrep-stdout-", ".json")
+        file.writeText(stdout)
+        stdoutRef = file.absolutePath
+        return ScanExecutionResult(success = true, stdoutRef = file.absolutePath)
     }
 
-    override fun normalizeResult(context: ScanContext, raw: RawScanOutput): ScanResult {
-        val output = raw as SemgrepRawOutput
-        val findings = output.findings.mapNotNull { f ->
-            val platformRule = output.ruleMap[f.engineRuleId] ?: return@mapNotNull null
-            RawFinding(
-                engineRuleId = platformRule,
-                ruleName = f.ruleName,
-                filePath = f.filePath,
-                line = f.line,
-                severity = severityMap[f.severity] ?: f.severity,
-                category = f.category,
-                message = f.message,
-                codeSnippet = f.codeSnippet,
-            )
-        }
-        return ScanResult(findings, true)
+    /** 读取 stdout 文件并解析为引擎原生 finding（保留原始 severity，映射在 normalizeResult）。 */
+    override fun collectResult(context: ScanContext): List<RawFinding> {
+        val ref = stdoutRef ?: return emptyList()
+        val content = runCatching { File(ref).readText() }.getOrDefault("")
+        return parser.parse(content)
     }
 
-    override fun supports(engine: String): Boolean = engine.equals("SEMGREP", ignoreCase = true)
+    /** severity 映射（Semgrep ERROR/WARNING/INFO → HIGH/MEDIUM/LOW）；ruleId→平台规则映射留在编排器。 */
+    override fun normalizeResult(context: ScanContext, raw: List<RawFinding>): List<RawFinding> =
+        raw.map { it.copy(severity = severityMapper.map(it.severity)) }
+
+    /** 删除 executeScan 产生的 stdout 临时文件（不泄漏）。 */
+    override fun cleanup(context: ScanContext) {
+        stdoutRef?.let { runCatching { File(it).delete() } }
+        stdoutRef = null
+    }
+
+    /** 扫描目标：优先编排器检出的 workDir，缺失回退 repoUrl（spec §5.2）。 */
+    private fun scanTarget(context: ScanContext): String = context.workDir ?: context.repoUrl
 }
 ```
 
-> `SemgrepCli` 需补充 `outputAsFindings(): List<SemgrepFinding>` 与 `ruleMap(): Map<String, String>`（从 CLI JSON 输出解析 + 配置文件映射）。**若既有 `SemgrepCli` 已有等价能力，直接复用；否则在 `SemgrepCli.kt` 追加这两个方法**，并保持其既有 `run(repoDir, configJson)` 不变。测试的 mock 相应 stub 这两个方法。
-
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `./gradlew :module-result:test --tests "*SemgrepAdapterTest*" --tests "*DefaultAdapterBehaviorsTest*"`
-Expected: PASS。
+Run: `./gradlew :module-engine-adapter:test`
+Expected: PASS（SemgrepAdapterTest 6 个 + parser/mapper 既有测试）。
 
 - [ ] **Step 5: 全量回归**
 
 Run: `./gradlew build`
-Expected: BUILD SUCCESSFUL。
+Expected: BUILD SUCCESSFUL（编排器仍走 `adapter.scan()` 默认管线 → 现在内部跑 Semgrep 五阶段；STUB 测试仍 override scan()，零修改）。
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add module-result/src/main/kotlin/com/example/compliance/result/engine module-result/src/test/kotlin/com/example/compliance/result/engine
-git commit -m "feat(result): semgrep adapter on five-stage contract with severity mapping in normalize"
+git add module-engine-adapter/src/main/kotlin/com/example/compliance/engineadapter/semgrep/SemgrepAdapter.kt module-engine-adapter/src/test/kotlin/com/example/compliance/engineadapter/semgrep/SemgrepAdapterTest.kt
+git commit -m "feat(engine-adapter): semgrep adapter five-stage contract with stdout ref and severity mapping in normalize"
 ```
 
 ---
 
-### Task 8.4: 编排器接入五方法管线 + commitId 回填 + M8 集成测试
+### Task 8.4: 编排器五阶段管线 + PREPARING + 门控 checkout + M8 引擎契约集成测试
+
+> **基线**：本任务在 Task 6.5 之后的 `ScanOrchestrator`（已含版本盖章/occurrence/verifyRechecking/durationMs）上做**外科手术式修改**，不重写整文件。
 
 **Files:**
-- Modify: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanOrchestrator.kt`（五方法管线 + GitCheckout）
+- Modify: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanOrchestrator.kt`（构造 + 五阶段 + PREPARING + 门控 checkout + finally cleanup）
+- Modify: `app-server/src/test/kotlin/com/example/compliance/scan/ScanPipelineIntegrationTest.kt`（等待谓词 +PREPARING，测试内部实现形态，Ruling 允许；断言语义不变）
+- Modify: `app-server/src/test/kotlin/com/example/compliance/scan/M6LifecycleIntegrationTest.kt`（waitDone 谓词 +PREPARING）
+- Modify: `app-server/src/test/kotlin/com/example/compliance/remediation/M7RemediationIntegrationTest.kt`（waitDone 谓词 +PREPARING）
 - Create: `app-server/src/test/kotlin/com/example/compliance/scan/M8EngineContractIntegrationTest.kt`
 
 **Interfaces:**
-- Consumes: Task 8.1 五方法契约；Task 8.2 `GitCheckout`；Task 8.3 `SemgrepAdapter`（经 registry 注入）。
-- Produces: `ScanOrchestrator` 管线：`prepareScan → checkout(GitCheckout, 门控) → executeScan → collectResult → normalizeResult → cleanup(finally)`；成功后 `task.commitId = gitCommit`、`task.workDir` 生命周期由 orchestrator 管理；STUB 引擎（不在 checkout 名单）跳过 clone、commitId 为 null。
+- Consumes: Task 8.1 五方法契约 + `ScanExecutionResult`；Task 8.2 `GitCheckout`/`CheckoutResult` + `app.scan.checkout-engines`；Task 6.5 既有 executeAsync 全链。
+- Produces: 编排器五阶段序列 `prepareScan → executeScan → collectResult → normalizeResult`（cleanup 在 finally，spec §5.1）；PREPARING 置位（§5.3）；门控 checkout（engine ∈ checkout-engines → `gitCheckout.checkout` + 回填 `task.commitId`/`context.workDir`；否则跳过、commitId=null）；`ScanExecutionResult` 失败 → 抛 500（retry/PARTIAL_SUCCESS 按 PF-10 延后：单引擎不可达，枚举已存在）。
+- **Ruling（ledger 细化）**：冻结/新集成测试的等待谓词统一加 `PREPARING`（测试内部实现形态，frozen 保护的是断言与语义；§7 亦授权「测试 STUB 适配器按新契约更新」）。
 
-- [ ] **Step 1: 写失败集成测试**
+- [ ] **Step 1: 写失败集成测试（STUBM8 五方法 + cleanup flag + commitId null）**
 
 创建 `app-server/src/test/kotlin/com/example/compliance/scan/M8EngineContractIntegrationTest.kt`：
 
@@ -2644,12 +2970,9 @@ import com.example.compliance.project.application.CreateProjectCommand
 import com.example.compliance.project.application.ProjectService
 import com.example.compliance.result.application.FindingLifecyclePort
 import com.example.compliance.result.engine.RawFinding
-import com.example.compliance.result.engine.RawScanOutput
 import com.example.compliance.result.engine.ScanContext
 import com.example.compliance.result.engine.ScanEngineAdapter
-import com.example.compliance.result.engine.ScanExecution
-import com.example.compliance.result.engine.ScanPreparation
-import com.example.compliance.result.engine.ScanResult
+import com.example.compliance.result.engine.ScanExecutionResult
 import com.example.compliance.rule.application.AddEngineBindingCommand
 import com.example.compliance.rule.application.CreateRuleCommand
 import com.example.compliance.rule.application.RuleService
@@ -2664,115 +2987,184 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** M8-* 数据前缀；STUB 引擎五方法形态，验证编排器调用五阶段、commitId 门控回填。 */
+/** M8 引擎契约集成测试：STUBM8 以五方法形态接入，验证编排器五阶段管线 + PREPARING + 门控 checkout（commitId null）+ cleanup finally。
+ *  数据前缀 M8-*。 */
 class M8EngineContractIntegrationTest : AbstractIntegrationTest() {
+
+    object StubM8State {
+        @Volatile var prepared = false
+        @Volatile var executed = false
+        @Volatile var collected = false
+        @Volatile var cleanupCalled = false
+    }
 
     @TestConfiguration
     class StubM8AdapterConfig {
         @Bean
         fun stubM8Adapter(): ScanEngineAdapter = object : ScanEngineAdapter {
             override val engine = "STUBM8"
-            var prepared = false
-            override fun prepareScan(context: ScanContext): ScanPreparation = ScanPreparation { "tmp-m8" }.also { prepared = true }
-            override fun executeScan(context: ScanContext, preparation: ScanPreparation): ScanExecution = object : ScanExecution {}
-            override fun collectResult(context: ScanContext, execution: ScanExecution): RawScanOutput = object : RawScanOutput {}
-            override fun normalizeResult(context: ScanContext, raw: RawScanOutput): ScanResult = ScanResult(
-                findings = listOf(RawFinding("stub-m8-rule", "M8", "src/main/java/M8.java", 30, "HIGH", "m", "x"))
-            )
+            override fun prepareScan(context: ScanContext) { StubM8State.prepared = true }
+            override fun executeScan(context: ScanContext): ScanExecutionResult {
+                StubM8State.executed = true
+                return ScanExecutionResult(success = true, durationMs = 5)
+            }
+            override fun collectResult(context: ScanContext): List<RawFinding> {
+                StubM8State.collected = true
+                return listOf(RawFinding("stub-m8-rule", "M8", "src/main/java/M8.java", 10, "HIGH", "m", "x=id;"))
+            }
+            override fun normalizeResult(context: ScanContext, raw: List<RawFinding>): List<RawFinding> = raw
+            override fun cleanup(context: ScanContext) { StubM8State.cleanupCalled = true }
         }
     }
 
     @Autowired lateinit var projectService: ProjectService
+    @Autowired lateinit var checklistService: ChecklistService
     @Autowired lateinit var ruleService: RuleService
     @Autowired lateinit var scanTaskService: ScanTaskService
     @Autowired lateinit var lifecyclePort: FindingLifecyclePort
 
     @Test
-    fun `orchestrator runs five-stage pipeline and keeps commitId null for gated-out engine`() {
-        // 1. 项目 + 仓库 + 规则（STUBM8 引擎绑定）
+    fun `orchestrator drives five stages with cleanup and skips checkout for stub engine`() {
+        // 1. 项目 + 仓库
         val project = projectService.create(CreateProjectCommand("M8P", "M8 项目", null, null))
         projectService.bindRepository(project.id!!, BindRepositoryCommand("m8-repo", "https://git.example.com/m8.git", "GITLAB", "main", "tok"))
+        // 2. 规则（STUBM8 绑定，无需清单——本次只断言引擎契约）
         val rule = ruleService.create(CreateRuleCommand("M8-SQLI", "M8 注入", "HIGH", null))
         ruleService.addEngineBinding(rule.id!!, AddEngineBindingCommand("STUBM8", "stub-m8-rule", null))
-        ruleService.addComplianceMapping(rule.id!!, "M8-001")
         ruleService.setEvaluationPolicy(rule.id!!, SetPolicyCommand("FAIL", null, "severity == 'HIGH'"))
         ruleService.publish(rule.id!!)
-        // 2. 扫描（STUBM8 不在 checkout 名单 → 不触网）
-        val task = scanTaskService.startScan(project.id!!, "STUBM8", "main")
-        waitDone(task.id!!)
-        // 3. 断言：occurrence 口径 1 条、commitId 为 null（门控跳过 clone）
-        assertEquals(ScanTaskStatus.SUCCESS, scanTaskService.get(task.id!!).status)
-        assertEquals(1, lifecyclePort.findingsForScanTask(task.id!!).size)
-        assertNull(scanTaskService.get(task.id!!).commitId)
-    }
 
-    private fun waitDone(taskId: Long) {
+        // 3. 触发扫描并等待完成（谓词含 PREPARING）
+        StubM8State.prepared = false; StubM8State.executed = false
+        StubM8State.collected = false; StubM8State.cleanupCalled = false
+        val task = scanTaskService.startScan(project.id!!, "STUBM8", "main")
         var done = false
         repeat(50) {
-            val s = scanTaskService.get(taskId).status
-            if (s != ScanTaskStatus.RUNNING && s != ScanTaskStatus.PENDING) { done = true; return@repeat }
+            val s = scanTaskService.get(task.id!!).status
+            if (s != ScanTaskStatus.PENDING && s != ScanTaskStatus.PREPARING && s != ScanTaskStatus.RUNNING) { done = true; return@repeat }
             Thread.sleep(200)
         }
-        assertTrue(done, "scan $taskId should finish within timeout")
+        assertTrue(done, "scan should finish within timeout")
+        assertEquals(ScanTaskStatus.SUCCESS, scanTaskService.get(task.id!!).status)
+
+        // 4. 契约断言：五阶段全部驱动 + cleanup 在 finally + STUBM8 未检出（commitId null）
+        assertTrue(StubM8State.prepared, "prepareScan called")
+        assertTrue(StubM8State.executed, "executeScan called")
+        assertTrue(StubM8State.collected, "collectResult called")
+        assertTrue(StubM8State.cleanupCalled, "cleanup called in finally")
+        assertNull(scanTaskService.get(task.id!!).commitId, "STUBM8 not in checkout-engines -> commitId null")
+
+        // 5. 结果贯通：finding 归属本次扫描（五阶段产物进 occurrence 查询）
+        val views = lifecyclePort.findingsForScanTask(task.id!!)
+        assertEquals(1, views.size)
+        assertEquals("M8-SQLI", views[0].ruleCode)
+        assertEquals("STUBM8", views[0].engine)  // FindingView.engine 由 m6b 编辑批次补尾字段（发现引擎）
     }
 }
 ```
 
-> 注意：需要清单才能评估？本测试**不建清单**——`evaluate` 在 `publishedItemsForProject` 返回 null 时返回空列表，评估跳过（既有行为），finding 落库不受影响。若既有编排器在无清单时抛错，则在本测试中补建清单（复用 M6 的建单/发布/绑定三步）。
+> 说明：等待谓词已含 `PREPARING`；其余三个测试（ScanPipeline/M6/M7）的等待谓词在 Step 3 同步修改。
 
 - [ ] **Step 2: 运行确认失败**
 
 Run: `./gradlew :app-server:test --tests "*M8EngineContractIntegrationTest*"`
-Expected: 编译失败或断言失败（编排器仍走旧单方法管线）。
+Expected: 编译失败或断言失败——`ScanExecutionResult` 未在编排器消费、`task.commitId` 未回填、五阶段未驱动（取决于前序是否完成）。若仅因 `ScanOrchestrator` 尚未改，则该测试无法编译通过。
 
-- [ ] **Step 3: 编排器接入五方法管线**
+- [ ] **Step 3: 编排器五阶段改造（外科手术）**
 
-`ScanOrchestrator` 构造新增 `private val gitCheckout: GitCheckout`，将扫描段改为：
-
+`ScanOrchestrator.kt`：
+1. 构造参数追加（import `com.example.compliance.scan.checkout.GitCheckout`）：
 ```kotlin
-            val context = ScanContext(
-                scanTaskId = task.id!!,
-                projectId = task.projectId,
-                repoUrl = repo.gitUrl,
-                ref = task.ref,
-                configJson = null,
-                workDir = null,          // prepare 后填充
-                timeoutSeconds = 300,
-            )
-            val start = System.currentTimeMillis()
-
-            // P2-D6：GitCheckout 归编排器；门控名单外引擎跳过 clone（STUB 不触网）
-            val preparation = adapter.prepareScan(context)
-            val commitId = gitCheckout.checkout(task.engine, repo.gitUrl, task.ref, preparation.workDir ?: "tmp")
-            task.commitId = commitId
-            val execCtx = context.copy(workDir = preparation.workDir, commitId = commitId)
-            val execution = adapter.executeScan(execCtx, preparation)
-            val raw = adapter.collectResult(execCtx, execution)
-            val result = adapter.normalizeResult(execCtx, raw)
-            adapter.cleanup(execCtx, preparation)
-            val duration = System.currentTimeMillis() - start
+    private val gitCheckout: GitCheckout,
+    @Value("\${app.scan.checkout-engines:}") private val checkoutEngines: Set<String>,
 ```
+（`import org.springframework.beans.factory.annotation.Value`；CSV 自动拆成 Set。）
 
-（其余段落——`result.success` 判断、归一化、upsert、occurrence、verifyRechecking、评估——保持 Task 6.5 已落地的形态不变。）
+2. `executeAsync` 开头（原置 RUNNING）改为置 **PREPARING** 并声明 finally 用到的 vars：
+```kotlin
+        task.status = ScanTaskStatus.PREPARING        // spec §5.3
+        task.startedAt = Instant.now()
+        scanTaskRepository.save(task)
+        log(scanTaskId, "PREPARE", "INFO", "start engine=${task.engine} project=${task.projectId}")
+        var adapter: ScanEngineAdapter? = null
+        var context: ScanContext? = null
+        var checkoutDir: String? = null
+        val start = System.currentTimeMillis()
+```
+3. try 内，在既有 `val adapter = registry.get(...) ?: throw` 之后、构造 context 之前，插入门控检出：
+```kotlin
+            val resolvedAdapter = registry.get(task.engine)
+                ?: throw BusinessException(400, "unsupported engine: ${task.engine}")
+            adapter = resolvedAdapter
+            val checkout = if (task.engine.uppercase() in checkoutEngines) {
+                gitCheckout.checkout(repo.gitUrl, task.ref).also { checkoutDir = it.workDir }
+            } else null
+            context = ScanContext(
+                scanTaskId = task.id!!, projectId = task.projectId, repoUrl = repo.gitUrl,
+                ref = task.ref, workDir = checkout?.workDir, commitId = checkout?.commitId,
+            )
+            task.status = ScanTaskStatus.RUNNING
+            task.commitId = checkout?.commitId
+            scanTaskRepository.save(task)
+```
+4. 把 `val context = ScanContext(task.id!!, task.projectId, repo.gitUrl, task.ref)` 与 `val start = ...`/`val result = adapter.scan(context)`/`val duration = ...` 替换为五阶段：
+```kotlin
+            resolvedAdapter.prepareScan(context!!)
+            val execution = resolvedAdapter.executeScan(context!!)
+            val raw = resolvedAdapter.collectResult(context!!)
+            val normalizedRaw = resolvedAdapter.normalizeResult(context!!, raw)
+            val duration = execution.durationMs ?: (System.currentTimeMillis() - start)
+            if (!execution.success) {
+                throw BusinessException(500, execution.errorMessage ?: "engine scan failed")
+            }
+            val ruleIds = mutableSetOf<Long>()
+            var skipped = 0
+            for (rawFinding in normalizedRaw) {
+                val rule = ruleQueryService.publishedRuleByEngineRuleId(task.engine, rawFinding.engineRuleId)
+                if (rule == null) { skipped++; continue }
+                ruleIds += rule.id!!
+                normalized += NewFinding(
+                    rule.ruleCode, rule.name, rawFinding.filePath, rawFinding.line,
+                    rawFinding.severity, rawFinding.category, rawFinding.message, rawFinding.codeSnippet,
+                )
+            }
+            log(scanTaskId, "NORMALIZE", "INFO", "raw=${normalizedRaw.size} mapped=${normalized.size} skipped=$skipped")
+```
+（`result.findings` 引用全部改为 `normalizedRaw`；`result.success`/`result.errorMessage` 改 `execution.*`。Task 6.5 的版本盖章、ruleIds 收集、upsert、occurrence、verifyRechecking、ScanJob、评估、SUCCESS 落库保持不动。）
+
+5. catch 保持 FAILED 不变；在 catch 之后补 `finally`：
+```kotlin
+        } finally {
+            // spec §5.1/§5.2：adapter cleanup + 删除检出临时目录（均幂等，绝不触碰用户路径）
+            context?.let { adapter?.cleanup(it) }
+            checkoutDir?.let { gitCheckout.cleanup(it) }
+        }
+```
+（注意 Kotlin 语法：现有方法体是 `try { ... } catch (e: Exception) { ... }`，追加 `finally` 块即可。）
+
+6. **等待谓词同步（测试内部形态，Ruling）**：把三个集成测试的等待条件改为排除 PENDING/PREPARING/RUNNING 三态：
+   - `ScanPipelineIntegrationTest` 第 68-70 行：`if (scanTaskService.get(task.id!!).status != ScanTaskStatus.RUNNING && != PENDING)` → 追加 `&& scanTaskService.get(task.id!!).status != ScanTaskStatus.PREPARING`；
+   - `M6LifecycleIntegrationTest.waitDone`（第 272-276 行）同样追加 `PREPARING`；
+   - `M7RemediationIntegrationTest.waitDone` 同样追加 `PREPARING`。
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `./gradlew :app-server:test --tests "*M8EngineContractIntegrationTest*" --tests "*M6LifecycleIntegrationTest*" --tests "*M7RemediationIntegrationTest*"`
-Expected: 全部 PASS。
+Run: `./gradlew :app-server:test --tests "*M8EngineContractIntegrationTest*" --tests "*ScanPipelineIntegrationTest*" --tests "*M6LifecycleIntegrationTest*" --tests "*M7RemediationIntegrationTest*"`
+Expected: 全部 PASS（STUBM8 五阶段 + 冻结 ScanPipeline + M6 + M7 复扫闭环）。
 
 - [ ] **Step 5: 全量回归**
 
 Run: `./gradlew build`
-Expected: BUILD SUCCESSFUL（含 frozen ScanPipeline/ReportApi 解冻后全绿）。
+Expected: BUILD SUCCESSFUL（含 ReportApi、FindingRepository、Smoke 全部绿）。
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanOrchestrator.kt app-server/src/test/kotlin/com/example/compliance/scan/M8EngineContractIntegrationTest.kt
-git commit -m "feat(scan): orchestrator on five-stage pipeline with gated checkout and commit backfill"
+git add module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanOrchestrator.kt app-server/src/test/kotlin/com/example/compliance/scan
+git commit -m "feat(scan): orchestrator five-stage pipeline with PREPARING, gated checkout and cleanup finally"
 ```
 
-> **M8 完成标准**：五方法契约落地且默认实现可空转；STUB 集成测试同步解冻；GitCheckout 门控（STUB 不触网、SEMGREP 真实 clone）；SemgrepAdapter 五阶段化；编排器五方法管线 + commitId 回填；`./gradlew build` 全绿。
+> **M8 完成标准**：五方法契约落地、STUB 兼容零修改；SemgrepAdapter 五阶段化且 severity 映射在 normalize；编排器五阶段 + PREPARING + 门控 checkout（STUBM8 commitId null）+ cleanup 不泄漏；`./gradlew build` 全绿。
 
 ---
 ## M9 — 工程化补全（OpenAPI CI 触发 + RBAC + 异常语义 + 审计回滚 + 指标 + 通知）
@@ -2780,7 +3172,7 @@ git commit -m "feat(scan): orchestrator on five-stage pipeline with gated checko
 ### Task 9.1: OpenAPI Token 表（多 CI 管理，BCrypt）
 
 **Files:**
-- Create: `app-server/src/main/resources/db/migration/V11__openapi_token.sql`
+- Create: `app-server/src/main/resources/db/migration/V10__openapi_token.sql`   <!-- PF-7：spec §6.3 绑定 V10=openapi_token -->
 - Create: `module-openapi/src/main/kotlin/com/example/compliance/openapi/domain/ApiToken.kt`
 - Create: `module-openapi/src/main/kotlin/com/example/compliance/openapi/infrastructure/ApiTokenRepository.kt`
 - Create: `module-openapi/src/main/kotlin/com/example/compliance/openapi/application/ApiTokenService.kt`
@@ -2865,9 +3257,9 @@ class ApiTokenServiceTest {
 Run: `./gradlew :module-openapi:test --tests "*ApiTokenServiceTest*"`
 Expected: 编译失败 — `ApiTokenService` 不存在（module-openapi 需先有 test 源集与测试依赖，见 Step 3 前的 build.gradle 调整）。
 
-- [ ] **Step 3: 写 V11 迁移**
+- [ ] **Step 3: 写 V10 迁移**
 
-创建 `app-server/src/main/resources/db/migration/V11__openapi_token.sql`：
+创建 `app-server/src/main/resources/db/migration/V10__openapi_token.sql`：
 
 ```sql
 -- CI 触发 API Token（P2-D7）：多 CI 各自一个 token，可独立禁用/过期；明文仅创建时返回一次
@@ -2882,7 +3274,7 @@ CREATE TABLE api_token (
     created_at   TIMESTAMP    NOT NULL DEFAULT now(),
     updated_at   TIMESTAMP    NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_api_token_status ON api_token (status);
+-- PF-7：spec §6.3 不要求 status 索引（按 name 唯一查找 + 小表），不建 idx_api_token_status
 ```
 
 - [ ] **Step 4: 实现实体、仓储与服务**
@@ -3059,8 +3451,8 @@ Expected: BUILD SUCCESSFUL。
 - [ ] **Step 9: Commit**
 
 ```bash
-git add module-openapi app-server/src/main/resources/db/migration/V11__openapi_token.sql
-git commit -m "feat(openapi): per-CI api token table with bcrypt hashing and admin management"
+git add module-openapi app-server/src/main/resources/db/migration/V10__openapi_token.sql
+git commit -m "feat(openapi): per-CI api token table with bcrypt hashing and admin management (V10)"
 ```
 
 ---
@@ -3068,18 +3460,17 @@ git commit -m "feat(openapi): per-CI api token table with bcrypt hashing and adm
 ### Task 9.2: OpenAPI CI 触发扫描端点（X-API-Token 校验）
 
 **Files:**
-- Create: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTriggerPort.kt`
-- Modify: `module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTaskService.kt`（实现 ScanTriggerPort）
+- Consume（不新建，M7 Task 7.4 已产出）: `module-scan/.../application/ScanTriggerPort.kt` + `ScanTaskView`；`ScanTaskService` 已实现 `triggerScan`
 - Create: `module-openapi/src/main/kotlin/com/example/compliance/openapi/api/OpenApiScanController.kt`
 - Modify: `module-openapi/build.gradle.kts`（+implementation(project(":module-scan"))）
 - Modify: `module-auth/src/main/kotlin/com/example/compliance/auth/config/SecurityConfig.kt`（permitAll + ADMIN 路径，字符串字面量）
 - Create: `module-openapi/src/test/kotlin/com/example/compliance/openapi/api/OpenApiScanControllerTest.kt`
 
 **Interfaces:**
-- Consumes: `ApiTokenService.verify`（Task 9.1）；`ScanTriggerPort`。
-- Produces: `ScanTriggerPort`（module-scan.application）：
-  - `fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView`
-- Produces: `POST /api/v1/openapi/scans` body `TriggerScanCommand(projectId, engine, ref?)`，头 `X-API-Token`：
+- Consumes: `ApiTokenService.verify`（Task 9.1）；`ScanTriggerPort`（**M7 Task 7.4 定义**，module-scan.application）：
+  - `fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView`（输入可空；缺省由 startScan 生成 UUID）
+  - `data class ScanTaskView(val id: Long, val projectId: Long, val engine: String, val status: ScanTaskStatus, val requestId: String)`（输出恒非空）
+- Produces: `POST /api/v1/openapi/scans` body `TriggerScanCommand(projectId, engine, ref?, requestId?)`，头 `X-API-Token`：
   - 有合法 token → 以该 CI 名义触发（triggerType="CI"）
   - 无 token / token 无效 → 回落 JWT principal（triggerType 沿用请求或 "CI"）
   - 校验失败 → 401
@@ -3149,34 +3540,9 @@ class OpenApiScanControllerTest {
 Run: `./gradlew :module-openapi:test --tests "*OpenApiScanControllerTest*"`
 Expected: 编译失败 — `ScanTriggerPort`/`OpenApiScanController` 不存在。
 
-- [ ] **Step 3: 实现 ScanTriggerPort + 适配**
+- [ ] **Step 3: 消费 M7 的 ScanTriggerPort（无需新建）**
 
-`module-scan/.../application/ScanTriggerPort.kt`：
-
-```kotlin
-package com.example.compliance.scan.application
-
-import com.example.compliance.scan.domain.ScanTaskStatus
-
-/** 触发扫描的端口：module-openapi（开放 API）经此触发，不依赖 scan 内部实现。 */
-data class ScanTaskView(val id: Long, val projectId: Long, val engine: String, val status: ScanTaskStatus, val requestId: String?)
-
-interface ScanTriggerPort {
-    fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView
-}
-```
-
-`ScanTaskService` 实现 `ScanTriggerPort`，新增：
-
-```kotlin
-    override fun triggerScan(projectId: Long, engine: String, ref: String?, triggerType: String, requestId: String?): ScanTaskView {
-        val task = startScan(projectId, engine, ref, triggerType)
-        if (requestId != null) task.requestId = requestId
-        return ScanTaskView(task.id!!, task.projectId, task.engine, task.status, task.requestId)
-    }
-```
-
-（`startScan` 已接受 `triggerType` 参数——Task 6.5。`ScanTaskService` 声明 `: ScanTaskService, ScanTriggerPort`。）
+`ScanTriggerPort` 接口与 `ScanTaskView` 值类型已由 **M7 Task 7.4** 定义于 `module-scan/.../application/`，且 `ScanTaskService` 已在 Task 7.4 实现 `triggerScan(projectId, engine, ref, triggerType, requestId)`（内部委托 `startScan(..., triggerType, requestId)` 透传 requestId）。本任务**不新建**该文件、**不改** `ScanTaskService`——直接进入 Step 4，由 `OpenApiScanController` 注入并调用。
 
 - [ ] **Step 4: 实现 OpenApiScanController**
 
@@ -3248,8 +3614,8 @@ Expected: BUILD SUCCESSFUL。
 - [ ] **Step 8: Commit**
 
 ```bash
-git add module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTriggerPort.kt module-scan/src/main/kotlin/com/example/compliance/scan/application/ScanTaskService.kt module-openapi module-auth/src/main/kotlin/com/example/compliance/auth/config/SecurityConfig.kt
-git commit -m "feat(openapi): CI scan trigger endpoint with X-API-Token validation and jwt fallback"
+git add module-openapi module-auth/src/main/kotlin/com/example/compliance/auth/config/SecurityConfig.kt
+git commit -m "feat(openapi): CI scan trigger endpoint consuming ScanTriggerPort with X-API-Token validation"
 ```
 
 ---
@@ -3503,7 +3869,7 @@ git commit -m "feat(common): business exception code to HTTP status mapping and 
 - Create: `module-checklist/src/test/kotlin/com/example/compliance/checklist/application/ChecklistAuditTest.kt`
 
 **Interfaces:**
-- Consumes: `AuditService`（既有）。
+- Consumes: `AuditService`（既有，PF-9 真实签名 `record(action: String, module: String, userId: Long? = null, resourceType: String? = null, resourceId: Long? = null, detail: String? = null, ip: String? = null)`）。
 - Produces: 规则中心/清单中心全部写操作（create/update/publish/bind/version）落审计记录（action 如 `RULE_CREATED`/`RULE_PUBLISHED`/`CHECKLIST_PUBLISHED`/`CHECKLIST_BIND`，detail 为变更摘要 JSON）；`AuditService.record` 幂等可用（已存在则不重复加）。
 
 - [ ] **Step 1: 写失败测试**
@@ -3536,7 +3902,8 @@ class RuleAuditTest {
 
         ruleService.publish(1L, 9L)
 
-        verify { auditService.record(9L, "RULE_PUBLISHED", any(), any(), any()) }
+        // PF-9 真实签名：record(action, module, userId, resourceType, resourceId, detail, ip)
+        verify { auditService.record("RULE_PUBLISHED", "rule", 9L, "rule", any(), any()) }
     }
 }
 ```
@@ -3553,7 +3920,8 @@ Expected: 编译失败或 verify 失败——写操作未审计。
 `RuleService` 构造注入 `auditService: AuditService`（既有若已注入则只补调用点），在 `publish`/`update`/`setPolicy`/`addEngineBinding`/`addComplianceMapping` 成功分支末尾：
 
 ```kotlin
-        auditService.record(actorId, "RULE_PUBLISHED", "rule", ruleId, "{\"ruleCode\":\"$ruleCode\",\"version\":$version}")
+        // PF-9 真实签名顺序：record(action, module, userId, resourceType, resourceId, detail)
+        auditService.record("RULE_PUBLISHED", "rule", actorId, "rule", ruleId, "{\"ruleCode\":\"$ruleCode\",\"version\":$version}")
 ```
 
 （各操作的 action 名/字段以 spec §审计 命名表为准：`RULE_CREATED`/`RULE_UPDATED`/`RULE_PUBLISHED`/`RULE_POLICY_SET`/`RULE_ENGINE_BIND`/`RULE_MAPPING`；`CHECKLIST_CREATED`/`CHECKLIST_ITEM_ADDED`/`CHECKLIST_PUBLISHED`/`CHECKLIST_BIND`/`CHECKLIST_ITEM_UPDATED`。）
@@ -3608,7 +3976,7 @@ import kotlin.test.assertEquals
 class ReportMetricsTest {
 
     private fun view(status: FindingStatus, severity: String) = FindingView(
-        1L, 9L, 1L, "R1", severity, status, "A.java", 1, Instant.now(), Instant.now(), 1,
+        1L, 9L, 1L, "R1", severity, status, "A.java", 1, Instant.now(), Instant.now(), 1, "STUB",
     )
 
     @Test
@@ -3717,7 +4085,7 @@ git commit -m "feat(report): unified metrics model consumed by all report endpoi
 - Create: `module-notification/src/main/kotlin/com/example/compliance/notification/domain/Notification.kt`
 - Create: `module-notification/src/main/kotlin/com/example/compliance/notification/infrastructure/NotificationRepository.kt`
 - Create: `module-notification/src/main/kotlin/com/example/compliance/notification/application/NotificationService.kt`
-- Create: `app-server/src/main/resources/db/migration/V12__notification.sql`
+- Create: `app-server/src/main/resources/db/migration/V11__notification.sql`   <!-- PF-7：V11=notification（V10 已被 openapi_token 占用） -->
 - Create: `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationServiceTest.kt`
 
 **Interfaces:**
@@ -3764,9 +4132,9 @@ class NotificationServiceTest {
 Run: `./gradlew :module-notification:test --tests "*NotificationServiceTest*"`
 Expected: 编译失败 — `NotificationService` 不存在。
 
-- [ ] **Step 3: 写 V12 迁移**
+- [ ] **Step 3: 写 V11 迁移**
 
-创建 `app-server/src/main/resources/db/migration/V12__notification.sql`：
+创建 `app-server/src/main/resources/db/migration/V11__notification.sql`：
 
 ```sql
 CREATE TABLE notification (
@@ -3842,8 +4210,8 @@ Expected: BUILD SUCCESSFUL。
 - [ ] **Step 7: Commit**
 
 ```bash
-git add module-notification app-server/src/main/resources/db/migration/V12__notification.sql
-git commit -m "feat(notification): notification entity, V12 migration, and stub send service"
+git add module-notification app-server/src/main/resources/db/migration/V11__notification.sql
+git commit -m "feat(notification): notification entity, V11 migration, and stub send service"
 ```
 
 ---
@@ -3955,7 +4323,7 @@ git commit -m "test(openapi): M9 integration - CI trigger auth and exception sem
 - P2-D6（GitCheckout 归编排器）→ Task 8.2 + 8.4。
 - P2-D7（openapi token 表多 CI）→ Task 9.1 + 9.2。
 - P2-D8（Adapter 五方法带默认实现）→ Task 8.1。
-- V8-V10 迁移 → Task 6.1（V8）、7.1（V9）、7.3（V10）；V11（openapi token，9.1）、V12（notification，9.7）。
+- 迁移编号（PF-7 重排）→ Task 6.1（V8）、7.1（V9）、9.1（**V10=openapi_token，spec §6.3 绑定**）、9.7（**V11=notification**）；无 waiver 迁移（PF-6）。
 - 复扫验证闭环（verifyRechecking）→ Task 6.3 + 6.5 + 7.5。
 - RBAC 矩阵 → Task 9.3。
 - 异常语义 → Task 9.4。
@@ -3969,16 +4337,16 @@ git commit -m "test(openapi): M9 integration - CI trigger auth and exception sem
 **3. 类型一致性核对**：
 - `FindingStatus` 11 态：Task 6.1 定义 → 6.3/6.4/7.x/9.6 全部引用一致。
 - `FindingLifecyclePort`：6.3 定义 5 方法 → 7.1 补 `findById` → 7.2/7.3/7.4/9.6 消费一致。
-- `FindingView` 字段：6.3 定义 → 7.1/7.2/9.6 构造一致。
-- `ScanContext` 字段：6.5 使用旧四字段 → 8.1 扩展 + 8.3/8.4 消费一致。
-- `ScanEngineAdapter` 五方法：8.1 定义 → 8.3/8.4 + STUB 解冻一致。
+- `FindingView` 字段：6.3 定义（含 engine 尾字段默认 ""）→ 7.1/7.2/8.4/9.6 构造一致。
+- `ScanContext` 字段：6.5 使用旧四字段 → 8.1 扩展（workDir/commitId 等 9 字段）+ 8.3/8.4 消费一致。
+- `ScanEngineAdapter` 五方法：8.1 定义（含 scan() 兼容默认）→ 8.3/8.4 + STUB 解冻一致。
 - `upsertByFingerprint(projectId, scanTaskId, engine, findings)` 签名贯穿 6.4/6.5 一致。
-- `startScan(projectId, engine, ref, triggerType="MANUAL")` 贯穿 6.5/9.2 一致。
-- `ScanTriggerPort.triggerScan`（9.2 定义）被 9.2 控制器消费一致。
+- `startScan(projectId, engine, ref, triggerType="MANUAL", requestId: String? = null)` 贯穿 6.5/7.4/9.2 一致。
+- `ScanTriggerPort.triggerScan`（**M7 Task 7.4 定义**）被 9.2 控制器消费一致。
 
 **4. 已知调整点（以实际代码为准的核对项）**：
 - 既有 `BusinessException` 是否已有 `code` 字段（9.4 Step 3 注明补字段）。
-- `AuditService.record` 实际签名（6.3/9.5 注明以文件为准）。
+- `AuditService.record` 实际签名（6.3/9.5 已按 PF-9 修正为真实签名 `record(action, module, userId, resourceType, resourceId, detail, ip)`）。
 - `RuleService`/`ChecklistService` 既有构造与写操作签名（9.5 注明）。
 - `ScanTaskService` 是否有 `listByProject`（9.8 注明 fallback）。
 - 冻结 STUB 解冻（8.1 Step 5）断言值不变。
