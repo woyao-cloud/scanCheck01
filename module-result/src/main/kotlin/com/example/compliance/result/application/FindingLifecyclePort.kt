@@ -37,4 +37,5 @@ interface FindingLifecyclePort {
     fun findingsForScanTask(scanTaskId: Long): List<FindingView>
     fun findingsByProject(projectId: Long, status: FindingStatus?): List<FindingView>
     fun verifyRechecking(projectId: Long, scanTaskId: Long, presentFindingIds: Set<Long>): VerifyResult
+    fun findById(findingId: Long): FindingView?
 }

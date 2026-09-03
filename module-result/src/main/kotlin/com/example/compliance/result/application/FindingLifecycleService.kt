@@ -72,6 +72,9 @@ class FindingLifecycleService(
         return VerifyResult(closed, regressed)
     }
 
+    override fun findById(findingId: Long): FindingView? =
+        findingRepository.findById(findingId).map { it.toView() }.orElse(null)
+
     private fun com.example.compliance.result.domain.Finding.toView() = FindingView(
         id!!, projectId, scanTaskId, ruleCode, severity, status, filePath, lineNumber,
         firstSeenAt, lastSeenAt, occurrenceCount, engine,
