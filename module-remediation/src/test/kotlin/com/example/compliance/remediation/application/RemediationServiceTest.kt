@@ -1,11 +1,14 @@
 package com.example.compliance.remediation.application
 
+import com.example.compliance.common.event.RemediationWaiverEvent
 import com.example.compliance.remediation.domain.RemediationTask
 import com.example.compliance.remediation.infrastructure.RemediationTaskRepository
 import com.example.compliance.result.application.FindingLifecyclePort
 import com.example.compliance.result.application.FindingView
 import com.example.compliance.result.domain.FindingStatus
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
@@ -20,7 +23,8 @@ class RemediationServiceTest {
     private val taskRepository = mockk<RemediationTaskRepository>()
     private val lifecyclePort = mockk<FindingLifecyclePort>()
     private val triggerPort = mockk<com.example.compliance.scan.application.ScanTriggerPort>()
-    private val service = RemediationService(taskRepository, lifecyclePort, triggerPort)
+    private val eventPublisher = mockk<org.springframework.context.ApplicationEventPublisher>()
+    private val service = RemediationService(taskRepository, lifecyclePort, triggerPort, eventPublisher)
 
     private fun view(status: FindingStatus) = FindingView(
         id = 7L, projectId = 9L, scanTaskId = 1L, ruleCode = "R1", severity = "HIGH",
@@ -164,11 +168,15 @@ class RemediationServiceTest {
         every { lifecyclePort.addEvidence(7L, "DOC", "http://x/waiver", 9L) } returns
             com.example.compliance.result.application.EvidenceView(2L, 7L, "DOC", "http://x/waiver", 9L, java.time.Instant.EPOCH)
         every { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) } returns FindingStatus.WAIVED
+        // WAIVED 终态 → 发布豁免事件；strict mock 需 stub Unit 方法。
+        // any<Any>() 显式类型强制解析到 publishEvent(Object) 重载（事件类是普通值类型，非 ApplicationEvent）。
+        every { eventPublisher.publishEvent(any<Any>()) } just Runs
 
         val result = service.status(7L, FindingStatus.WAIVED, "risk accepted", "DOC", "http://x/waiver", 9L)
 
         assertEquals(FindingStatus.WAIVED, result.finding.status)
         verify { lifecyclePort.transition(7L, FindingStatus.WAIVED, "risk accepted", 9L) }
+        verify { eventPublisher.publishEvent(match<Any> { it is RemediationWaiverEvent && it.findingId == 7L && it.reason == "risk accepted" }) }
     }
 
     @Test

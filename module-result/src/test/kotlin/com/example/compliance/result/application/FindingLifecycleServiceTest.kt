@@ -1,6 +1,7 @@
 package com.example.compliance.result.application
 
 import com.example.compliance.common.audit.AuditService
+import com.example.compliance.common.event.FindingRegressionEvent
 import com.example.compliance.result.domain.Finding
 import com.example.compliance.result.domain.FindingEvidence
 import com.example.compliance.result.domain.FindingStatus
@@ -8,7 +9,9 @@ import com.example.compliance.result.domain.FindingStatusSnapshot
 import com.example.compliance.result.infrastructure.FindingEvidenceRepository
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingStatusSnapshotRepository
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
@@ -21,7 +24,8 @@ class FindingLifecycleServiceTest {
     private val statusRepository = mockk<FindingStatusSnapshotRepository>()
     private val evidenceRepository = mockk<FindingEvidenceRepository>()
     private val auditService = mockk<AuditService>(relaxed = true)
-    private val service = FindingLifecycleService(findingRepository, statusRepository, evidenceRepository, auditService)
+    private val eventPublisher = mockk<org.springframework.context.ApplicationEventPublisher>()
+    private val service = FindingLifecycleService(findingRepository, statusRepository, evidenceRepository, auditService, eventPublisher)
 
     @Test
     fun `transition writes snapshot and audit and updates finding status`() {
@@ -52,6 +56,9 @@ class FindingLifecycleServiceTest {
         } }
         // statusRepository is a strict mock: transition() calls save() before the trailing verify, so it must be stubbed.
         every { statusRepository.save(any()) } answers { firstArg() }
+        // 命中回归（regressed=1）→ 发布回归事件；strict mock 需 stub Unit 方法。
+        // any<Any>() 显式类型强制解析到 publishEvent(Object) 重载（事件类是普通值类型，非 ApplicationEvent）。
+        every { eventPublisher.publishEvent(any<Any>()) } just Runs
 
         // 复扫命中 f1（present），f2/f3 缺席；目标集 = 全部三个 finding（保持原语义）
         val result = service.verifyRechecking(5L, 99L, setOf(1L), targetFindingIds = setOf(1L, 2L, 3L))
@@ -61,6 +68,7 @@ class FindingLifecycleServiceTest {
         assertEquals(FindingStatus.CLOSED, fixed2.status)
         assertEquals(FindingStatus.CLOSED, fixed3.status)
         verify { statusRepository.save(any<FindingStatusSnapshot>()) }
+        verify { eventPublisher.publishEvent(match<Any> { it is FindingRegressionEvent && it.findingIds == listOf(1L) }) }
     }
 
     @Test
