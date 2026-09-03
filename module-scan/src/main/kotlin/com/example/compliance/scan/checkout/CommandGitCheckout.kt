@@ -61,9 +61,17 @@ class SystemProcessRunner : ProcessRunner {
         if (dir != null) pb.directory(Paths.get(dir).toFile())
         pb.redirectErrorStream(true)
         val p = pb.start()
-        val stdout = p.inputStream.bufferedReader().readText()
-        val exit = p.waitFor(120, TimeUnit.SECONDS)
-        val code = if (exit) p.exitValue() else { p.destroyForcibly(); -1 }
-        return ProcessOutput(code, stdout)
+        // 并发排空 stdout：先 waitFor 后读会因 64KB 管道缓冲写满而死锁；
+        // 串行 readText 再 waitFor 则子进程挂起且保持管道打开时无限阻塞（R-8.2-b）。
+        val stdout = StringBuilder()
+        val drain = Thread {
+            p.inputStream.bufferedReader().forEachLine { stdout.append(it).append('\n') }
+        }
+        drain.isDaemon = true
+        drain.start()
+        val finished = p.waitFor(120, TimeUnit.SECONDS)
+        val code = if (finished) p.exitValue() else { p.destroyForcibly(); -1 }
+        drain.join(5_000)
+        return ProcessOutput(code, stdout.toString().trimEnd('\n'))
     }
 }
