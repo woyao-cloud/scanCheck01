@@ -30,6 +30,11 @@ abstract class AbstractIntegrationTest {
             .withDatabaseName("compliance")
             .withUsername("compliance")
             .withPassword("compliance")
+            // M11 (task 11.5): 集成套件每个唯一 @TestConfiguration 各持一个 Hikari 池（默认 10 连接）。
+            // M11 新增第 10 个上下文 → 基线 ~100 连接顶满 PG 默认 max_connections=100，后续上下文
+            // Flyway 启动时 "too many clients already"（ScanPipelineIntegrationTest 全量回归可见）。
+            // 抬升容器连接上限，避免每个新测试类都踩线；不改任何测试语义。
+            .withCommand("postgres", "-c", "max_connections=300")
             .apply { start() }
 
         @JvmStatic

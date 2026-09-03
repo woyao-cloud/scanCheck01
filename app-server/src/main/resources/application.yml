@@ -34,8 +34,14 @@ app:
   credential:
     # F6 (spec §6.5)：凭据加密密钥经 APP_CREDENTIAL_SECRET 注入，默认值仅限非敏感占位
     secret: "${APP_CREDENTIAL_SECRET:0123456789abcdef0123456789abcdef}"
+  gitleaks:
+    command: gitleaks
+    timeout-seconds: 300
+  trivy:
+    command: trivy
+    timeout-seconds: 600
   scan:
-    checkout-engines: SEMGREP   # 仅这些引擎在编排器侧触发 GitCheckout；STUB 等跳过（Task 8.4 消费）
+    checkout-engines: SEMGREP,GITLEAKS,TRIVY   # M11：GITLEAKS/TRIVY 都扫检出目录 → 触发 GitCheckout
 
 springdoc:
   swagger-ui:

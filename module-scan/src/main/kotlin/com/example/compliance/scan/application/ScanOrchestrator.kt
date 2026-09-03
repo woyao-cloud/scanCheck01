@@ -109,6 +109,8 @@ class ScanOrchestrator(
                 normalized += NewFinding(
                     rule.ruleCode, rule.name, rawFinding.filePath, rawFinding.line,
                     rawFinding.severity, rawFinding.category, rawFinding.message, rawFinding.codeSnippet,
+                    rawFinding.packageName, rawFinding.packageVersion, rawFinding.fixedVersion,
+                    rawFinding.cveId, rawFinding.cvssScore,
                 )
             }
             log(scanTaskId, "NORMALIZE", "INFO", "raw=${normalizedRaw.size} mapped=${normalized.size} skipped=$skipped")
