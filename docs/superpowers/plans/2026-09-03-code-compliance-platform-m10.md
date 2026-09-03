@@ -709,7 +709,7 @@ fun `findingsGlobal filters by project status and severity`() {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `./gradlew :module-project:test --tests "*ProjectServiceTest*" :module-scan:test --tests "*ScanTaskServiceTest*" :module-result:test --tests "*FindingLifecycleServiceTest*"`
+Run: `./gradlew :module-project:test --tests "*ProjectServiceTest*" :module-scan:test --tests "*ScanTriggerPortTest*" :module-result:test --tests "*FindingLifecycleServiceTest*"`
 Expected: FAIL —— port/方法未定义。
 
 - [ ] **Step 3: 实现**
@@ -719,9 +719,15 @@ Expected: FAIL —— port/方法未定义。
 ```kotlin
 package com.example.compliance.common.api
 
-/** 统一分页响应（spec 统一 API：{items,page,size,total}）。 */
-data class PageView<T>(val items: List<T>, val page: Int, val size: Int, val total: Long)
+/**
+ * 统一分页响应（spec §6.2 命名 `PageView<T>`）。与既有 `PageResponse` 同形
+ * （{items,page,size,total}）—— 别名复用同一底层数据类，避免重复类型
+ * （M10 ruling：spec 统一 API 形状已由 `PageResponse` 承载，`PageView` 仅为 spec 命名视角）。
+ */
+typealias PageView<T> = PageResponse<T>
 ```
+
+> **Ruling（10.5, spec-API-reuse, DRY）**: `PageResponse<T>(items,page,size,total)` 已在 module-common/common/api（既有，UserController:32 消费）。M10 spec §6.2 命名 `PageView<T>` 且原计划新建重复数据类 → implementer 上报。裁决：**`PageView` 改为 `PageResponse` 的 typealias** —— spec 名称原样保留、单一底层类、JSON 形状相同、10.6 消费与测试零改动、UserController 不动。fix commit `62aa7f2`。
 
 `module-project/ProjectQueryPort.kt`：
 
@@ -841,9 +847,19 @@ class M10AdminIntegrationTest : AbstractIntegrationTest() {
     @Autowired lateinit var mockMvc: MockMvc
     @Autowired lateinit var projectService: ProjectService
 
+    // 每测试唯一 code（ADM-P<n>）—— @BeforeEach 每次执行 create，固定 code 第二次起抛
+    // "project code already exists"（M9Rbac setupFinding 同款唯一前缀模式）。
+    // 计数器须放 companion（JUnit5 默认 PER_METHOD：实例字段每次测试重置为 0，三个测试
+    // 都会生成 ADM-P1 撞码）—— 10.6 实证修正（brief 原文用实例字段，第 2 个测试起 duplicate）。
+    companion object {
+        @JvmStatic
+        private var seedCounter = 0
+    }
+
     @BeforeEach
     fun seed() {
-        projectService.create(CreateProjectCommand("ADM-P1", "M10 admin project", null, null))
+        seedCounter++
+        projectService.create(CreateProjectCommand("ADM-P$seedCounter", "M10 admin project", null, null))
     }
 
     @Test
