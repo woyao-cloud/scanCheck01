@@ -1,17 +1,49 @@
 package com.example.compliance.result.engine
 
-/** 扫描引擎统一端口：每个引擎一个实现，不得绕过 adapter 直接调用引擎。 */
+/** 扫描引擎统一端口（spec §5.1，P2-D8）：五方法契约全部带默认实现，现有实现零改动兼容。 */
 interface ScanEngineAdapter {
     val engine: String
-    fun scan(context: ScanContext): ScanResult
+
+    fun supports(engineType: String): Boolean = engineType.equals(engine, ignoreCase = true)
+
+    fun prepareScan(context: ScanContext) {}
+    fun executeScan(context: ScanContext): ScanExecutionResult = ScanExecutionResult(success = true)
+    fun collectResult(context: ScanContext): List<RawFinding> = emptyList()
+    fun normalizeResult(context: ScanContext, raw: List<RawFinding>): List<RawFinding> = raw
+    fun cleanup(context: ScanContext) {}
+
+    /** 兼容默认方法：跑五阶段管线并聚合为旧 ScanResult（冻结 STUB 测试 override scan() 时零改动；编排器 M8 直接调用五阶段）。 */
+    fun scan(context: ScanContext): ScanResult {
+        prepareScan(context)
+        try {
+            val execution = executeScan(context)
+            val raw = collectResult(context)
+            val normalized = normalizeResult(context, raw)
+            return ScanResult(normalized, success = execution.success, errorMessage = execution.errorMessage, durationMs = execution.durationMs ?: 0)
+        } finally {
+            cleanup(context)
+        }
+    }
 }
+
+/** 引擎执行结果；stdoutRef 指向引擎原始输出落盘位置（collectResult 读取，spec §5.1）。 */
+data class ScanExecutionResult(
+    val success: Boolean,
+    val errorMessage: String? = null,
+    val durationMs: Long? = null,
+    val stdoutRef: String? = null,
+)
 
 data class ScanContext(
     val scanTaskId: Long,
     val projectId: Long,
     val repoUrl: String,
     val ref: String? = null,
-    val configJson: String? = null,
+    val workDir: String? = null,        // 编排器检出的本地目录（§5.2），SemgrepAdapter 优先作为扫描目标
+    val commitId: String? = null,
+    val timeoutSeconds: Long? = null,
+    val paramsJson: String? = null,     // rule_engine_binding.parameters
+    val configJson: String? = null,     // 兼容保留
 )
 
 /** 引擎原生结果，severity 已归一化为 LOW/MEDIUM/HIGH/CRITICAL。 */

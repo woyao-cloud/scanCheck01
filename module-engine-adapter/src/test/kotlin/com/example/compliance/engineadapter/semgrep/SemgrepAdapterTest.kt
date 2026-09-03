@@ -17,7 +17,7 @@ class SemgrepAdapterTest {
         val json = javaClass.getResource("/semgrep/basic.json").readText(StandardCharsets.UTF_8)
         every { cli.run(any(), any()) } returns json
         val result = adapter.scan(
-            ScanContext(1L, 1L, "https://git.example.com/repo.git", "main", """{"localPath":"/tmp/repo"}""")
+            ScanContext(1L, 1L, "https://git.example.com/repo.git", "main", configJson = """{"localPath":"/tmp/repo"}""")
         )
         assertTrue(result.success)
         assertEquals(2, result.findings.size)
