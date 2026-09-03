@@ -5,6 +5,7 @@ import com.example.compliance.result.engine.ScanContext
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.nio.charset.StandardCharsets
 import kotlin.test.assertEquals
@@ -16,6 +17,7 @@ class GitleaksAdapterTest {
 
     private val json = javaClass.getResource("/gitleaks/basic.json").readText(StandardCharsets.UTF_8)
     private val ctx = ScanContext(1L, 1L, "https://git.example.com/repo.git", "main")
+    private val failCtx = ScanContext(101L, 1L, "https://git.example.com/repo.git", "main")
 
     @Test
     fun `execute and collect keep raw severities, normalize maps them`() {
@@ -35,10 +37,17 @@ class GitleaksAdapterTest {
     @Test
     fun `cli failure maps to unsuccessful execution without writing stdout file`() {
         every { cli.run(any()) } throws IllegalStateException("gitleaks exited with code 126")
-        val execution = adapter.executeScan(ctx)
+        val execution = adapter.executeScan(failCtx)
         assertTrue(!execution.success)
         assertEquals("gitleaks exited with code 126", execution.errorMessage)
-        assertTrue(adapter.collectResult(ctx).isEmpty())
+        assertTrue(execution.stdoutRef == null)                    // F1: cli 失败不落盘 stdout
+        assertTrue(adapter.collectResult(failCtx).isEmpty())
+    }
+
+    @AfterEach
+    fun tearDown() {
+        adapter.cleanup(ctx)
+        adapter.cleanup(failCtx)
     }
 
     @Test

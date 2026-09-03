@@ -4,6 +4,7 @@ import com.example.compliance.result.engine.RawFinding
 import com.example.compliance.result.engine.ScanContext
 import io.mockk.every
 import io.mockk.mockk
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.nio.charset.StandardCharsets
 import kotlin.test.assertEquals
@@ -15,6 +16,7 @@ class TrivyAdapterTest {
 
     private val json = javaClass.getResource("/trivy/basic.json").readText(StandardCharsets.UTF_8)
     private val ctx = ScanContext(1L, 1L, "https://git.example.com/repo.git", "main")
+    private val failCtx = ScanContext(101L, 1L, "https://git.example.com/repo.git", "main")
 
     @Test
     fun `execute collect normalize keeps dependency fields and maps severity`() {
@@ -35,9 +37,16 @@ class TrivyAdapterTest {
     @Test
     fun `cli failure maps to unsuccessful execution without stdout file`() {
         every { cli.run(any()) } throws IllegalStateException("trivy exited with code 1")
-        val execution = adapter.executeScan(ctx)
+        val execution = adapter.executeScan(failCtx)
         assertTrue(!execution.success)
-        assertTrue(adapter.collectResult(ctx).isEmpty())
+        assertTrue(execution.stdoutRef == null)                    // F1: cli 失败不落盘 stdout
+        assertTrue(adapter.collectResult(failCtx).isEmpty())
+    }
+
+    @AfterEach
+    fun tearDown() {
+        adapter.cleanup(ctx)
+        adapter.cleanup(failCtx)
     }
 
     @Test
