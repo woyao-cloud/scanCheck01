@@ -1023,7 +1023,7 @@ class M14EngineIntegrationTest : AbstractIntegrationTest() {
         assertEquals("M14-DET", v.ruleCode)
         assertEquals("STUBDET", v.engine)
         assertEquals("src/main/kotlin/com/example/App.kt", v.filePath)
-        assertEquals(17, v.line)
+        assertEquals(17, v.lineNumber)      // FindingView 暴露 lineNumber（非 line；R-M14-7 修正）
         assertNull(v.packageName, "code-class finding has no dependency fields")
     }
 
