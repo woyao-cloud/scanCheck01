@@ -15,7 +15,7 @@
 - **P2-D4**：`finding.status` 唯一权威；P3-D7 元数据刷新**不触碰**状态转移。
 - **P3-D9（纯重构）**：CliExecutor 抽取不改任何 CLI 对外语义；**既有 30 适配器测试 + 全量 build 必须全绿**。
 - **P3-D8**：依赖分流 both-or-neither 守卫；M14 Dependency-Check 必须遵守（本里程碑落地守卫本身）。
-- **P3-D6（门控）**：RealEngineE2ETest 用 `@EnabledIfEnvironmentVariable(name="APP_SCAN_E2E", matches="true")`；CI/测试默认不装二进制、默认跳过。
+- **P3-D6（门控）**：RealEngineE2ETest 用 `@EnabledIfEnvironmentVariable(named="APP_SCAN_E2E", matches="true")`；CI/测试默认不装二进制、默认跳过。
 - **共享 Testcontainers**：app-server 集成测试共享 PG 容器（`max_connections=300` 保持）；数据前缀 `M13-*`；`SmokeFirstClassOrderer` 不变。
 - 既有约定：Process*Cli 无直接单测（镜像先例），验证靠 30 适配器测试 + 全量 build；`VersionStatus` 等枚举包路径不变。
 
@@ -344,7 +344,7 @@ import kotlin.test.assertTrue
  * 注意：trivy 报告的 CVE 取决于本机漏洞库（~/.cache/trivy）。fixture 用 lodash@4.17.20（经典 CVE-2021-23337，
  * fixed 4.17.21）；若本机库报告不同 CVE，用 `trivy fs <fixture目录>` 确认后调整本类的绑定与指纹常量。
  */
-@EnabledIfEnvironmentVariable(name = "APP_SCAN_E2E", matches = "true")
+@EnabledIfEnvironmentVariable(named = "APP_SCAN_E2E", matches = "true")
 class RealEngineE2ETest : AbstractIntegrationTest() {
 
     @Autowired lateinit var projectService: ProjectService
