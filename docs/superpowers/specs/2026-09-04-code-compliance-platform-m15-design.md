@@ -75,7 +75,7 @@
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
-| `SonarQubeCli`（interface + `ProcessSonarQubeCli` @Component） | `engineadapter/sonarqube/` | `run(workDir, projectKey, token, serverUrl): String`——`sonar-scanner` 五参数（`-Dsonar.projectKey/-Dsonar.host.url/-Dsonar.projectBaseDir=<workDir>/-Dsonar.sources=.`），`SONAR_TOKEN` env，mergeErrorStream=true，successExitCodes={0}，返回合并输出（含 CE task URL） |
+| `SonarQubeCli`（interface + `ProcessSonarQubeCli` @Component） | `engineadapter/sonarqube/` | `run(workDir, projectKey, token, serverUrl): String`——`sonar-scanner` 四个 `-D` 属性（`-Dsonar.projectKey/-Dsonar.host.url/-Dsonar.projectBaseDir=<workDir>/-Dsonar.sources=.`），`SONAR_TOKEN` env，mergeErrorStream=true，successExitCodes={0}，返回合并输出（含 CE task URL） |
 | `SonarQubeApiClient` @Component | `engineadapter/sonarqube/` | `ceTaskStatus(serverUrl, taskId, token): String`（解析 `task.status`）；`issues(serverUrl, projectKey, token): String`（原始 JSON）。Bearer token 认证 |
 | `SonarQubeResultParser` @Component | `engineadapter/sonarqube/` | issue JSON → `List<RawFinding>`（代码类 8 字段；component 去 `projectKey:` 前缀→filePath；line；severity 原生；message；category=type） |
 | `SonarQubeSeverityMapper` @Component | `engineadapter/sonarqube/` | R-M15-D6 映射表 |
