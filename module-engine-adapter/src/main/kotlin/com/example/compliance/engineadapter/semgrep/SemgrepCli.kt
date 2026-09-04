@@ -22,6 +22,8 @@ class ProcessSemgrepCli(
             command = cmd,
             label = "semgrep",
             config = CliExecutor.Config(
+                // F1（spec 2.1）: {0=clean, 1=命中} 成功；config/rule 错误可产出合法 JSON
+                // {"errors":[...],"results":[]}，解析为干净扫描 → rescan 假 CLOSED，故 exit≥2 必须抛（含 stderr tail 诊断，spec 4.2）。
                 mergeErrorStream = true,
                 successExitCodes = setOf(0, 1),
             ),

@@ -125,7 +125,7 @@ CREATE INDEX idx_report_snapshot_task ON report_snapshot(scan_task_id);
 
 ### 4.1 真实二进制 E2E（门控）
 
-`app-server/src/test` 新增 `RealEngineE2ETest`（或按引擎拆 gitleaks/trivy 两个类），`@EnabledIfEnvironmentVariable(name="APP_SCAN_E2E", matches="true")` 门控：
+`app-server/src/test` 新增 `RealEngineE2ETest`（或按引擎拆 gitleaks/trivy 两个类），`@EnabledIfEnvironmentVariable(named="APP_SCAN_E2E", matches="true")` 门控：
 
 - 需要本机安装 gitleaks/trivy 二进制（spec 约束保留：CI 默认不装，测试类默认跳过）
 - 门控内跑真扫描：`ScanOrchestrator` 全链路（checkout 到临时 workdir → 真实 adapter → finding 落库），对**注入的已知漏洞 fixture 目录**断言命中
