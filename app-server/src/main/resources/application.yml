@@ -44,8 +44,11 @@ app:
     timeout-seconds: 600   # spec §5.1：DC 依赖库大、--noupdate 仍慢，默认 600
   detekt:
     timeout-seconds: 300   # R-M14-3：spec 未定名，镜像 semgrep/gitleaks 代码类引擎
+  sonarqube:
+    server-url: ${SONARQUBE_SERVER_URL:http://localhost:9000}   # spec §3.5：真实环境必配；默认 localhost 便于启动
+    timeout-seconds: 900                                          # CE 轮询总超时（R-M15-D1）
   scan:
-    checkout-engines: SEMGREP,GITLEAKS,TRIVY,DEPENDENCYCHECK,DETEKT   # M11/M14：真实引擎都扫检出目录 → 触发 GitCheckout
+    checkout-engines: SEMGREP,GITLEAKS,TRIVY,DEPENDENCYCHECK,DETEKT,SONARQUBE   # M15：SONARQUBE 扫检出目录 → 触发 GitCheckout
 
 springdoc:
   swagger-ui:
