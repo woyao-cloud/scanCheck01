@@ -54,9 +54,15 @@ class FindingService(
         var created = 0
         var updated = 0
         for (f in findings) {
-            // M11：依赖类（packageName/cveId 非空）走依赖指纹（plan.md §7.3）；否则代码类既有指纹
-            val fingerprint = if (f.packageName != null || f.cveId != null)
-                fingerprintGenerator.generateDependency(projectId, f.packageName!!, f.packageVersion, f.cveId!!)
+            // M13 P3-D8（M14 前置）: 依赖类判定收紧为 both-or-neither —— 单边（仅 packageName 或仅 cveId）是
+            // 上游适配器 bug（契约保证 Trivy 恒两者同设、Gitleaks/代码类恒两者不设），显式失败优于 NPE。
+            if ((f.packageName == null) != (f.cveId == null)) {
+                throw IllegalArgumentException(
+                    "dependency finding requires both packageName and cveId, got: packageName=${f.packageName}, cveId=${f.cveId}"
+                )
+            }
+            val fingerprint = if (f.packageName != null && f.cveId != null)
+                fingerprintGenerator.generateDependency(projectId, f.packageName, f.packageVersion, f.cveId)
             else
                 fingerprintGenerator.generate(projectId, f.ruleCode, f.filePath, f.lineNumber, f.codeSnippet)
             val existing = findingRepository.findByProjectIdAndFingerprint(projectId, fingerprint)
@@ -88,6 +94,13 @@ class FindingService(
             } else {
                 existing.occurrenceCount += 1
                 existing.lastSeenAt = Instant.now()
+                // M13 P3-D7: 依赖类 finding 复现时刷新整改指导元数据（advisory 更新后 fixedVersion/cvss 不再陈旧）。
+                // 不碰 finding.status（P2-D4 状态权威不变），只刷 packageVersion/fixedVersion/cvssScore。
+                if (existing.packageName != null && existing.cveId != null) {
+                    existing.packageVersion = f.packageVersion
+                    existing.fixedVersion = f.fixedVersion
+                    existing.cvssScore = f.cvssScore?.toBigDecimal()
+                }
                 findingRepository.save(existing)
                 historyRepository.save(FindingHistory().apply {
                     findingId = existing.id!!; this.scanTaskId = scanTaskId; action = "REAPPEARED"

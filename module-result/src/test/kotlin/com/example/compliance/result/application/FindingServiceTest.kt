@@ -11,6 +11,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class FindingServiceTest {
 
@@ -134,5 +135,45 @@ class FindingServiceTest {
 
         verify { findingRepository.save(match { it.fingerprint == fp && it.packageName == null && it.cveId == null }) }
         verify(exactly = 0) { fingerprintGenerator.generateDependency(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `reappearing dependency finding refreshes remediation metadata P3-D7`() {
+        val fpDep = "fp-dep-refresh"
+        val existing = Finding().apply {
+            id = 8L; projectId = 9L; status = FindingStatus.NEW; fingerprint = fpDep; occurrenceCount = 1
+            packageName = "lodash"; cveId = "CVE-2024-1234"
+            packageVersion = "4.17.19"; fixedVersion = "4.17.20"; cvssScore = 7.5.toBigDecimal()
+        }
+        every { fingerprintGenerator.generateDependency(9L, "lodash", "4.17.20", "CVE-2024-1234") } returns fpDep
+        every { findingRepository.findByProjectIdAndFingerprint(9L, fpDep) } returns existing
+        every { findingRepository.save(any<Finding>()) } answers { firstArg() }
+        every { historyRepository.save(any<FindingHistory>()) } answers { firstArg<FindingHistory>() }
+
+        val dep = NewFinding("M11TRV", "lodash proto pollution", "package-lock.json", null, "CRITICAL", null, "pollution", null,
+            "lodash", "4.17.20", "4.17.21", "CVE-2024-1234", 9.8)
+        val result = findingService.upsertByFingerprint(9L, 63L, "TRIVY", listOf(dep))
+
+        assertEquals(UpsertResult(0, 1), result)
+        assertEquals(2, existing.occurrenceCount)
+        assertEquals("4.17.20", existing.packageVersion)   // 刷新自 incoming —— advisory 更新后不陈旧
+        assertEquals("4.17.21", existing.fixedVersion)
+        assertEquals(9.8.toBigDecimal(), existing.cvssScore)
+        assertEquals(FindingStatus.NEW, existing.status)   // P2-D4: 不碰 status
+    }
+
+    @Test
+    fun `single-sided dependency finding throws IllegalArgumentException P3-D8`() {
+        // both-or-neither: 仅 packageName 或仅 cveId 是上游适配器 bug，显式失败优于 NPE
+        val packageOnly = NewFinding("M11TRV", "p", "package-lock.json", null, "HIGH", null, null, null,
+            "lodash", null, null, null, null)
+        assertFailsWith<IllegalArgumentException> {
+            findingService.upsertByFingerprint(9L, 64L, "TRIVY", listOf(packageOnly))
+        }
+        val cveOnly = NewFinding("M11TRV", "p", "package-lock.json", null, "HIGH", null, null, null,
+            null, null, null, "CVE-2024-1234", null)
+        assertFailsWith<IllegalArgumentException> {
+            findingService.upsertByFingerprint(9L, 65L, "TRIVY", listOf(cveOnly))
+        }
     }
 }
