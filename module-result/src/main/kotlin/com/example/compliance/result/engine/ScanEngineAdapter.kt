@@ -44,6 +44,8 @@ data class ScanContext(
     val timeoutSeconds: Long? = null,
     val paramsJson: String? = null,     // rule_engine_binding.parameters
     val configJson: String? = null,     // 兼容保留
+    // M15 (R-M15-D2)：编排器解密 Repository.credentialRef 注入；SonarQube 用作 SONAR_TOKEN。追加尾部默认 → 既有位置调用点零破坏。
+    val credentialToken: String? = null,
 )
 
 /** 引擎原生结果，severity 已归一化为 LOW/MEDIUM/HIGH/CRITICAL。 */

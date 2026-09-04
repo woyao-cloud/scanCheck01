@@ -2,6 +2,7 @@ package com.example.compliance.scan.application
 
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.project.application.ProjectService
+import com.example.compliance.project.infrastructure.CredentialCrypto
 import com.example.compliance.project.infrastructure.RepoRepository
 import com.example.compliance.result.application.FindingService
 import com.example.compliance.result.application.NewFinding
@@ -47,6 +48,7 @@ class ScanOrchestrator(
     private val checklistQueryService: com.example.compliance.checklist.application.ChecklistQueryService,
     private val lifecycleService: com.example.compliance.result.application.FindingLifecycleService,
     private val gitCheckout: GitCheckout,
+    private val credentialCrypto: CredentialCrypto,
     @Value("\${app.scan.checkout-engines:}") private val checkoutEngines: Set<String>,
 ) {
     private val objectMapper = ObjectMapper()
@@ -84,6 +86,7 @@ class ScanOrchestrator(
             context = ScanContext(
                 scanTaskId = task.id!!, projectId = task.projectId, repoUrl = repo.gitUrl,
                 ref = task.ref, workDir = checkout?.workDir, commitId = checkout?.commitId,
+                credentialToken = repo.credentialRef?.let { runCatching { credentialCrypto.decrypt(it) }.getOrNull() },  // R-M15-D2：凭证损坏不阻断扫描（SQ 认证时显式失败）
             )
             task.status = ScanTaskStatus.RUNNING
             task.commitId = checkout?.commitId

@@ -16,6 +16,7 @@ class CliExecutor(private val timeoutSeconds: Long) {
         val successExitCodes: Set<Int>,         // semgrep={0,1}（0=clean、1=命中）；gitleaks={0,1}；trivy={0}
         val resultFile: File? = null,           // gitleaks=--report-path 文件（JSON 来源）；null → 读 stdout 文件
         val includeStdoutTail: Boolean = false, // trivy=true；gitleaks=false
+        val env: Map<String, String> = emptyMap(),  // M15 (R-M15-D3)：进程环境变量（SONAR_TOKEN 等），不进 argv → 不泄露于进程列表
     )
 
     fun run(command: List<String>, label: String, config: Config): String {
@@ -23,6 +24,7 @@ class CliExecutor(private val timeoutSeconds: Long) {
         val err = if (config.mergeErrorStream) null else File.createTempFile("cli-err-", ".log")
         try {
             val pb = ProcessBuilder(command)
+            pb.environment().putAll(config.env)  // M15 (R-M15-D3)：token 等经环境变量传入，绝不进 argv
             pb.redirectOutput(out)
             if (config.mergeErrorStream) pb.redirectErrorStream(true) else pb.redirectError(err!!)
             val process = pb.start()
