@@ -491,6 +491,32 @@ class ReportTemplateServiceTest {
     }
 
     @Test
+    fun `disable ignores open draft and targets active published version`() {
+        // R-M12-6: 打开中的 DRAFT v3 在顶部，disable 必须无视之并停用活跃 PUBLISHED v2
+        val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
+        val draft = ReportTemplateVersion().apply { id = 9L; templateId = 1L; versionNo = 3; status = VersionStatus.DRAFT; sections = "{}" }
+        val published = ReportTemplateVersion().apply { id = 8L; templateId = 1L; versionNo = 2; status = VersionStatus.PUBLISHED; sections = "{}" }
+        every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template
+        every { versionRepository.findByTemplateIdOrderByVersionNoDesc(1L) } returns listOf(draft, published)
+        every { versionRepository.save(any()) } answers { firstArg() }
+
+        val disabled = service.disable("SCAN_SUMMARY")
+        assertEquals(VersionStatus.DISABLED, disabled.status)
+        assertEquals(2, disabled.versionNo)   // 目标是 PUBLISHED v2，不是 DRAFT v3
+    }
+
+    @Test
+    fun `disable without published version throws 400`() {
+        // R-M12-6: 仅 DRAFT（从未发布）→ 无活跃 PUBLISHED 可停用 → 400
+        val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
+        val draft = ReportTemplateVersion().apply { id = 9L; templateId = 1L; versionNo = 1; status = VersionStatus.DRAFT; sections = "{}" }
+        every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template
+        every { versionRepository.findByTemplateIdOrderByVersionNoDesc(1L) } returns listOf(draft)
+        val e = assertFailsWith<BusinessException> { service.disable("SCAN_SUMMARY") }
+        assertEquals(400, e.code)
+    }
+
+    @Test
     fun `versions lists desc`() {
         every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns
             ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
@@ -590,11 +616,13 @@ class ReportTemplateService(
         val template = templateRepository.findByTemplateType(type)
             ?: throw BusinessException(404, "no report template for type: $type")
         val versions = versionRepository.findByTemplateIdOrderByVersionNoDesc(template.id!!)
-        val latest = versions.firstOrNull()
-            ?: throw BusinessException(400, "no report template version to disable for: $type")
-        if (latest.status == VersionStatus.DISABLED) throw BusinessException(400, "report template already disabled: $type")
-        latest.status = VersionStatus.DISABLED
-        return versionRepository.save(latest)
+        // R-M12-6: 停用当前活跃的 PUBLISHED 版（spec §3.2 线性状态机 DRAFT→PUBLISHED→DISABLED，
+        // "生成只取 PUBLISHED"）。最新版若为打开中的 DRAFT 则无视之——DRAFT 从不参与生成，
+        // 停掉 DRAFT 只会让活跃 PUBLISHED 继续被生成使用，违背「停用」意图。
+        val active = versions.firstOrNull { it.status == VersionStatus.PUBLISHED }
+            ?: throw BusinessException(400, "no published report template version to disable for: $type")
+        active.status = VersionStatus.DISABLED
+        return versionRepository.save(active)
     }
 
     @Transactional(readOnly = true)
@@ -1446,11 +1474,15 @@ class M12ReportIntegrationTest : AbstractIntegrationTest() {
                 .content("""{"name":"M12 scan","sections":{"sections":[{"title":"Summary"}]}}"""))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.status").value("DRAFT"))
+        // CM 可 publish（general 规则）→ 200（R-M12-6：disable 仅停用活跃 PUBLISHED 版，先发布才有可停用对象）
+        mockMvc.perform(post("/api/v1/reports/templates/SCAN_SUMMARY/publish"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.status").value("PUBLISHED"))
         // AUDITOR 可看 versions（spec §3.3：ADMIN/CM/AUDITOR）→ 200
         val auditor = SecurityMockMvcRequestPostProcessors.user("m12-auditor").roles("AUDITOR")
         mockMvc.perform(get("/api/v1/reports/templates/SCAN_SUMMARY/versions").with(auditor))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data[0].status").value("DRAFT"))
+            .andExpect(jsonPath("$.data[0].status").value("PUBLISHED"))
         // AUDITOR / DEVELOPER 不能 draft → 403
         mockMvc.perform(post("/api/v1/reports/templates/SCAN_SUMMARY/draft").with(auditor)
                 .contentType(MediaType.APPLICATION_JSON).content("""{"sections":{}}"""))
@@ -1517,7 +1549,7 @@ class M12ReportIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-> **确定性设计（防实现者踩坑）**：本测试**不依赖扫描/评估业务数据构造**——TREND 生成对全新项目返回空 trend 列表（payload `"[]"`），零串扰且断言确定（ReportService.trend 对无 evaluation 项目返回空列表，无 404）；RBAC 三档在单方法内用 `.with(SecurityMockMvcRequestPostProcessors.user(...).roles(...))` 逐请求覆盖角色，规避 JUnit 方法顺序不确定性（AUDITOR versions 需模板已存在，故先 CM draft 再 AUDITOR 读，全在方法内自洽）。快照不可变性由 **API 表面**保证（快照无 PUT/DELETE 端点，spec §3.4；只增不改不删）。未认证 401 与 ReportApiIntegrationTest/RbacIntegrationTest 同形态（spring-security-test 已在 app-server test classpath）。
+> **确定性设计（防实现者踩坑）**：本测试**不依赖扫描/评估业务数据构造**——TREND 生成对全新项目返回空 trend 列表（payload `"[]"`），零串扰且断言确定（ReportService.trend 对无 evaluation 项目返回空列表，无 404）；RBAC 三档在单方法内用 `.with(SecurityMockMvcRequestPostProcessors.user(...).roles(...))` 逐请求覆盖角色，规避 JUnit 方法顺序不确定性（AUDITOR versions 需模板已存在，故先 CM draft+publish 再 AUDITOR 读，全在方法内自洽；publish 同时为 R-M12-6 disable 语义提供活跃 PUBLISHED 版）。快照不可变性由 **API 表面**保证（快照无 PUT/DELETE 端点，spec §3.4；只增不改不删）。未认证 401 与 ReportApiIntegrationTest/RbacIntegrationTest 同形态（spring-security-test 已在 app-server test classpath）。
 
 - [ ] **Step 2: 运行确认失败**
 
