@@ -1,0 +1,25 @@
+{
+  "total": 2,
+  "issues": [
+    {
+      "key": "AXM15_issue_1",
+      "rule": "java:S1134",
+      "severity": "MAJOR",
+      "component": "m15app:src/main/java/com/example/App.java",
+      "line": 17,
+      "message": "Remove this use of 'TODO'",
+      "status": "OPEN",
+      "type": "CODE_SMELL"
+    },
+    {
+      "key": "AXM15_issue_2",
+      "rule": "java:S2077",
+      "severity": "CRITICAL",
+      "component": "m15app:src/main/java/com/example/DbHelper.java",
+      "line": 42,
+      "message": "Make sure that using this pseudorandom number generator is safe here",
+      "status": "OPEN",
+      "type": "VULNERABILITY"
+    }
+  ]
+}
