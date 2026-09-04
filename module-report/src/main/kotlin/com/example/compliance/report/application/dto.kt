@@ -23,6 +23,7 @@ data class ComplianceSummary(
     val manual: Int,
     val skipped: Int,
     val items: List<ItemSummary>,
+    val checklistVersionId: Long? = null,   // M12: 快照可追溯引用（spec P3-D3）
 )
 
 data class TrendPoint(val evaluatedAt: String, val score: BigDecimal?, val failed: Int)

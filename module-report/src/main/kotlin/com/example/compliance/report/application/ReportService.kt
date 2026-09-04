@@ -48,6 +48,7 @@ class ReportService(
             manual = evaluation.manual,
             skipped = evaluation.skipped,
             items = items.map { ItemSummary(it.itemCode, it.result, it.findingCount) },
+            checklistVersionId = evaluation.checklistVersionId,   // M12: 快照可追溯引用（spec P3-D3）
         )
     }
 
