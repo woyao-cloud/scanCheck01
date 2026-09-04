@@ -1,0 +1,39 @@
+{
+  "reportSchema": "1.1",
+  "scanInfo": { "engineVersion": "10.0.0" },
+  "projectInfo": { "name": "M14 fixture" },
+  "dependencies": [
+    {
+      "fileName": "package-lock.json",
+      "filePath": "/workspace/package-lock.json",
+      "packages": [ { "id": "pkg:npm/lodash@4.17.20", "confidence": "HIGHEST" } ],
+      "vulnerabilityIds": [ { "id": "CVE-2021-23337", "confidence": "HIGHEST" } ],
+      "vulnerabilities": [
+        {
+          "source": "NVD",
+          "name": "CVE-2021-23337",
+          "severity": "High",
+          "cvssv3": { "baseScore": 9.8, "baseSeverity": "CRITICAL" },
+          "cvssv2": { "score": 10.0, "severity": "HIGH" },
+          "description": "Command Injection in lodash 4.17.20",
+          "notes": "",
+          "references": []
+        }
+      ]
+    },
+    {
+      "fileName": "server.js",
+      "filePath": "/workspace/server.js",
+      "packages": [],
+      "vulnerabilities": [
+        {
+          "source": "NVD",
+          "name": "CVE-2022-0002",
+          "severity": "Medium",
+          "cvssv3": { "baseScore": 5.3 },
+          "description": "Prototype pollution"
+        }
+      ]
+    }
+  ]
+}
