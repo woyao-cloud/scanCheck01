@@ -45,6 +45,12 @@ class SecurityConfig(
                 ).permitAll()
                 auth.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 auth.requestMatchers("/api/v1/openapi/tokens/**").hasRole("ADMIN")
+                // M12 RBAC（spec §3.3 三档，顺序敏感）：disable 仅 ADMIN；versions 可 AUDITOR；draft/publish 走 general
+                auth.requestMatchers("/api/v1/reports/templates/*/disable").hasRole("ADMIN")
+                auth.requestMatchers("/api/v1/reports/templates/*/versions")
+                    .hasAnyRole("ADMIN", "COMPLIANCE_MANAGER", "AUDITOR")
+                auth.requestMatchers("/api/v1/reports/templates/**")
+                    .hasAnyRole("ADMIN", "COMPLIANCE_MANAGER")
                 auth.anyRequest().authenticated()
             }
             .addFilterBefore(
