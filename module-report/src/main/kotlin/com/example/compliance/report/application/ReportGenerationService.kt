@@ -9,6 +9,7 @@ import com.example.compliance.report.infrastructure.ReportTemplateVersionReposit
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -69,10 +70,10 @@ class ReportGenerationService(
         .orElseThrow { BusinessException(404, "report snapshot not found: $id") }
 
     @Transactional(readOnly = true)
-    fun export(id: Long, format: String): String {
+    fun export(id: Long, format: String): Any {
         val snapshot = detail(id)
         return when (format) {
-            "json" -> snapshot.payload
+            "json" -> objectMapper.readTree(snapshot.payload)
             "html" -> HtmlReportRenderer.render(snapshot)
             else -> throw BusinessException(400, "unsupported export format: $format")
         }
@@ -81,7 +82,9 @@ class ReportGenerationService(
     // 列表：projectId/type 均为可选过滤，4 分支（快照列表页，无需 Specification——YAGNI）
     @Transactional(readOnly = true)
     fun list(projectId: Long?, type: String?, page: Int, size: Int): Page<ReportSnapshot> {
-        val pageable = PageRequest.of(page, size)
+        // C2（终审）: 公开列表端点硬化 —— 负 page 拒绝为 400，size 钳制 [1,100]，固定 id 倒序保证分页确定性
+        if (page < 0) throw BusinessException(400, "page must be non-negative")
+        val pageable = PageRequest.of(page, size.coerceIn(1, 100), Sort.by(Sort.Direction.DESC, "id"))
         return when {
             projectId != null && type != null -> snapshotRepository.findByProjectIdAndSnapshotType(projectId, type, pageable)
             projectId != null -> snapshotRepository.findByProjectId(projectId, pageable)

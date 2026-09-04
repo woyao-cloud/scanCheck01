@@ -2,6 +2,7 @@ package com.example.compliance.report.api
 
 import com.example.compliance.report.application.ReportGenerationService
 import com.example.compliance.report.domain.ReportSnapshot
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
@@ -25,6 +26,8 @@ class ReportSnapshotControllerTest {
 
     @Autowired lateinit var mockMvc: MockMvc
     @Autowired lateinit var generationService: ReportGenerationService
+
+    private val objectMapper = ObjectMapper()
 
     @TestConfiguration
     class GenServiceConfig {
@@ -66,12 +69,12 @@ class ReportSnapshotControllerTest {
     @Test
     fun `detail and export return content`() {
         every { generationService.detail(3L) } returns snapshot()
-        every { generationService.export(3L, "json") } returns """{"findingCount":3}"""
+        every { generationService.export(3L, "json") } returns objectMapper.readTree("""{"findingCount":3}""")
         mockMvc.perform(get("/api/v1/reports/snapshots/3"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data.payload").value("""{"findingCount":3}"""))
+            .andExpect(jsonPath("$.data.payload.findingCount").value(3))
         mockMvc.perform(get("/api/v1/reports/snapshots/3/export?format=json"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data").value("""{"findingCount":3}"""))
+            .andExpect(jsonPath("$.data.findingCount").value(3))
     }
 }

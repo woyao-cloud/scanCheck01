@@ -49,6 +49,11 @@ class ReportTemplateService(
             ?: throw BusinessException(404, "no report template for type: $type")
         val version = versionRepository.findFirstByTemplateIdAndStatusOrderByIdDesc(template.id!!, VersionStatus.DRAFT)
             ?: throw BusinessException(400, "no draft report template version to publish for: $type")
+        // R-M12-7（终审 Important #2）: 线性状态机单一活跃版——发布前把既有 PUBLISHED 全部降级为 DISABLED。
+        // 否则多 PUBLISHED 并存时 disable 只停最新，生成回落旧 PUBLISHED（「停用」意图落空）。
+        versionRepository.findByTemplateIdOrderByVersionNoDesc(template.id!!)
+            .filter { it.status == VersionStatus.PUBLISHED }
+            .forEach { it.status = VersionStatus.DISABLED; versionRepository.save(it) }
         version.status = VersionStatus.PUBLISHED
         val saved = versionRepository.save(version)
         // Ruling #34: audit_log.detail 是 JSONB，detail 必须传合法 JSON

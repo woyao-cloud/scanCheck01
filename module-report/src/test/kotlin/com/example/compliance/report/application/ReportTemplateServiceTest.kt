@@ -99,6 +99,24 @@ class ReportTemplateServiceTest {
     }
 
     @Test
+    fun `publish demotes prior published version - single active linear machine`() {
+        // 终审 Important #2: draft v1→publish→draft v2→publish 后 v1 必须降级为 DISABLED，
+        // 否则 disable 只停 v2 后生成回落 v1（「停用」意图落空）
+        val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
+        val v1 = ReportTemplateVersion().apply { id = 5L; templateId = 1L; versionNo = 1; status = VersionStatus.PUBLISHED; sections = "{}" }
+        val draft2 = ReportTemplateVersion().apply { id = 6L; templateId = 1L; versionNo = 2; status = VersionStatus.DRAFT; sections = "{}" }
+        every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template
+        every { versionRepository.findFirstByTemplateIdAndStatusOrderByIdDesc(1L, VersionStatus.DRAFT) } returns draft2
+        every { versionRepository.findByTemplateIdOrderByVersionNoDesc(1L) } returns listOf(draft2, v1)
+        every { versionRepository.save(any()) } answers { firstArg() }
+
+        val published = service.publish("SCAN_SUMMARY")
+        assertEquals(VersionStatus.PUBLISHED, published.status)
+        assertEquals(VersionStatus.DISABLED, v1.status)   // 旧 PUBLISHED 被降级，v2 成为唯一活跃版
+        assertEquals(2, published.versionNo)
+    }
+
+    @Test
     fun `disable marks latest published version disabled`() {
         val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
         val published = ReportTemplateVersion().apply { id = 5L; templateId = 1L; versionNo = 2; status = VersionStatus.PUBLISHED; sections = "{}" }

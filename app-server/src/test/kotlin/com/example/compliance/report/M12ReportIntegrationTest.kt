@@ -18,7 +18,9 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
 /** M12 端到端：模板生命周期 + RBAC 三档 + TREND 快照生成/列表/详情/导出（真实 DB + Security 链）。
  *  数据前缀 M12-*：TREND 生成只需 project（新项目 trend=空列表 → payload "[]"，确定性、零扫描/评估依赖）；
- *  report_template 表仅本测试类写入（TREND/SCAN_SUMMARY 两类型，无跨类串扰）。 */
+ *  report_template 表仅本测试类写入（TREND/SCAN_SUMMARY 两类型，无跨类串扰）。
+ *  不变量（C6）：本类独占 report_template 的 SCAN_SUMMARY/TREND 写入——若未来测试类也写这两类模板，
+ *  需同步更新本类 RBAC/生命周期断言。 */
 @AutoConfigureMockMvc
 class M12ReportIntegrationTest : AbstractIntegrationTest() {
 
@@ -101,15 +103,17 @@ class M12ReportIntegrationTest : AbstractIntegrationTest() {
             .andExpect(jsonPath("$.data.total").value(1))
             .andExpect(jsonPath("$.data.items[0].snapshotType").value("TREND"))
 
-        // 4. 详情回读 payload（不可变快照原文）
+        // 4. 详情回读 payload（不可变快照原文；payload 现为 JsonNode → 空数组断言）
         mockMvc.perform(get("/api/v1/reports/snapshots/$snapshotId"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.snapshotType").value("TREND"))
-            .andExpect(jsonPath("$.data.payload").value("[]"))
+            .andExpect(jsonPath("$.data.payload").isArray())
+            .andExpect(jsonPath("$.data.payload.length()").value(0))
 
-        // 5. 导出 JSON 与详情 payload 一致
+        // 5. 导出 JSON 与详情 payload 一致（JsonNode 原生序列化 → ArrayNode）
         mockMvc.perform(get("/api/v1/reports/snapshots/$snapshotId/export?format=json"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data").value("[]"))
+            .andExpect(jsonPath("$.data").isArray())
+            .andExpect(jsonPath("$.data.length()").value(0))
     }
 }

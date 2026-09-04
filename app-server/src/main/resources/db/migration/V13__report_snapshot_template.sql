@@ -12,7 +12,7 @@ CREATE UNIQUE INDEX uq_report_template_type ON report_template(template_type);
 
 CREATE TABLE report_template_version (
     id          BIGSERIAL PRIMARY KEY,
-    template_id BIGINT       NOT NULL,
+    template_id BIGINT       NOT NULL REFERENCES report_template(id),
     version_no  INT          NOT NULL,
     status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT',
     sections    JSONB        NOT NULL,

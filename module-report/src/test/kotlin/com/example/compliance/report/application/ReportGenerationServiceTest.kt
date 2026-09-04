@@ -8,9 +8,12 @@ import com.example.compliance.report.domain.ReportTemplateVersion
 import com.example.compliance.report.infrastructure.ReportSnapshotRepository
 import com.example.compliance.report.infrastructure.ReportTemplateRepository
 import com.example.compliance.report.infrastructure.ReportTemplateVersionRepository
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Test
+import org.springframework.data.domain.Pageable
 import java.math.BigDecimal
 import java.util.Optional
 import kotlin.test.assertEquals
@@ -24,6 +27,7 @@ class ReportGenerationServiceTest {
     private val versionRepository = mockk<ReportTemplateVersionRepository>(relaxed = true)
     private val snapshotRepository = mockk<ReportSnapshotRepository>(relaxed = true)
     private val service = ReportGenerationService(reportService, templateRepository, versionRepository, snapshotRepository)
+    private val mapper = ObjectMapper()
 
     private fun template(type: String) = ReportTemplate().apply { id = 1L; this.templateType = type; name = type.lowercase() }
     private fun published() = ReportTemplateVersion().apply {
@@ -101,8 +105,21 @@ class ReportGenerationServiceTest {
             payload = """{"findingCount":3,"engine":"SEMGREP"}"""; generatedAt = java.time.Instant.now()
         }
         every { snapshotRepository.findById(3L) } returns Optional.of(snapshot)
-        assertEquals(snapshot.payload, service.export(3L, "json"))
-        assertTrue(service.export(3L, "html").contains("findingCount"))
+        assertEquals(mapper.readTree(snapshot.payload), service.export(3L, "json"))
+        assertTrue((service.export(3L, "html") as String).contains("findingCount"))
         assertFailsWith<BusinessException> { service.export(3L, "pdf") }
+    }
+
+    @Test
+    fun `list rejects negative page with 400`() {
+        val e = assertFailsWith<BusinessException> { service.list(null, null, -1, 20) }
+        assertEquals(400, e.code)
+    }
+
+    @Test
+    fun `list clamps size to 100 with id desc sort`() {
+        every { snapshotRepository.findAll(any<Pageable>()) } returns mockk()
+        service.list(null, null, 0, 10000000)
+        verify { snapshotRepository.findAll(withArg<Pageable> { it.pageSize == 100 && it.sort.isSorted }) }
     }
 }

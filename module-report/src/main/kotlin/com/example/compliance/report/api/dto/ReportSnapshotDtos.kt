@@ -1,6 +1,8 @@
 package com.example.compliance.report.api.dto
 
 import com.example.compliance.report.domain.ReportSnapshot
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Instant
 
 data class GenerateRequest(
@@ -35,12 +37,13 @@ data class SnapshotView(
     val checklistVersionId: Long?,
     val snapshotType: String,
     val generatedAt: String,
-    val payload: String,
+    val payload: JsonNode,
 ) {
     companion object {
+        private val mapper = ObjectMapper()
         fun from(s: ReportSnapshot) = SnapshotView(
             s.id!!, s.templateVersionNo, s.projectId, s.scanTaskId, s.checklistVersionId,
-            s.snapshotType, s.generatedAt.toString(), s.payload,
+            s.snapshotType, s.generatedAt.toString(), mapper.readTree(s.payload),
         )
     }
 }

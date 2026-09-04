@@ -49,6 +49,6 @@ class ReportSnapshotController(private val generationService: ReportGenerationSe
         ApiResponse.ok(SnapshotView.from(generationService.detail(id)))
 
     @GetMapping("/snapshots/{id}/export")
-    fun export(@PathVariable id: Long, @RequestParam(defaultValue = "json") format: String): ApiResponse<String> =
+    fun export(@PathVariable id: Long, @RequestParam(defaultValue = "json") format: String): ApiResponse<Any> =
         ApiResponse.ok(generationService.export(id, format))
 }
