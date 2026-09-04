@@ -65,11 +65,13 @@ class ReportTemplateService(
         val template = templateRepository.findByTemplateType(type)
             ?: throw BusinessException(404, "no report template for type: $type")
         val versions = versionRepository.findByTemplateIdOrderByVersionNoDesc(template.id!!)
-        val latest = versions.firstOrNull()
-            ?: throw BusinessException(400, "no report template version to disable for: $type")
-        if (latest.status == VersionStatus.DISABLED) throw BusinessException(400, "report template already disabled: $type")
-        latest.status = VersionStatus.DISABLED
-        return versionRepository.save(latest)
+        // R-M12-6: 停用当前活跃的 PUBLISHED 版（spec §3.2 线性状态机 DRAFT→PUBLISHED→DISABLED，
+        // "生成只取 PUBLISHED"）。最新版若为打开中的 DRAFT 则无视之——DRAFT 从不参与生成，
+        // 停掉 DRAFT 只会让活跃 PUBLISHED 继续被生成使用，违背「停用」意图。
+        val active = versions.firstOrNull { it.status == VersionStatus.PUBLISHED }
+            ?: throw BusinessException(400, "no published report template version to disable for: $type")
+        active.status = VersionStatus.DISABLED
+        return versionRepository.save(active)
     }
 
     @Transactional(readOnly = true)

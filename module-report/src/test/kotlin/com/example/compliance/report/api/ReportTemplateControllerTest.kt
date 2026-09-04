@@ -1,7 +1,6 @@
 package com.example.compliance.report.api
 
 import com.example.compliance.checklist.domain.VersionStatus
-import com.example.compliance.report.api.dto.DraftRequest
 import com.example.compliance.report.application.ReportTemplateService
 import com.example.compliance.report.domain.ReportTemplateVersion
 import io.mockk.every

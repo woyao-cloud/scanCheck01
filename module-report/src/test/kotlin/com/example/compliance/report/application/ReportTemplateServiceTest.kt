@@ -13,10 +13,8 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
-import java.util.Optional
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReportTemplateServiceTest {
@@ -82,8 +80,13 @@ class ReportTemplateServiceTest {
 
         val published = service.publish("SCAN_SUMMARY")
         assertEquals(VersionStatus.PUBLISHED, published.status)
-        // Ruling #34: audit detail 必须是合法 JSON
-        verify { auditService.record("REPORT_TEMPLATE_PUBLISHED", "report_template", 1L, "report_template_version", 5L, any()) }
+        // Ruling #34: audit detail 必须是合法 JSON —— match matcher 实际解析校验，而非仅证明调用过
+        verify {
+            auditService.record(
+                "REPORT_TEMPLATE_PUBLISHED", "report_template", 1L, "report_template_version", 5L,
+                match { runCatching { mapper.readTree(it) }.isSuccess },
+            )
+        }
     }
 
     @Test
@@ -105,6 +108,32 @@ class ReportTemplateServiceTest {
 
         val disabled = service.disable("SCAN_SUMMARY")
         assertEquals(VersionStatus.DISABLED, disabled.status)
+    }
+
+    @Test
+    fun `disable ignores open draft and targets active published version`() {
+        // R-M12-6: 打开中的 DRAFT v3 在顶部，disable 必须无视之并停用活跃 PUBLISHED v2
+        val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
+        val draft = ReportTemplateVersion().apply { id = 9L; templateId = 1L; versionNo = 3; status = VersionStatus.DRAFT; sections = "{}" }
+        val published = ReportTemplateVersion().apply { id = 8L; templateId = 1L; versionNo = 2; status = VersionStatus.PUBLISHED; sections = "{}" }
+        every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template
+        every { versionRepository.findByTemplateIdOrderByVersionNoDesc(1L) } returns listOf(draft, published)
+        every { versionRepository.save(any()) } answers { firstArg() }
+
+        val disabled = service.disable("SCAN_SUMMARY")
+        assertEquals(VersionStatus.DISABLED, disabled.status)
+        assertEquals(2, disabled.versionNo)   // 目标是 PUBLISHED v2，不是 DRAFT v3
+    }
+
+    @Test
+    fun `disable without published version throws 400`() {
+        // R-M12-6: 仅 DRAFT（从未发布）→ 无活跃 PUBLISHED 可停用 → 400
+        val template = ReportTemplate().apply { id = 1L; templateType = "SCAN_SUMMARY"; name = "s" }
+        val draft = ReportTemplateVersion().apply { id = 9L; templateId = 1L; versionNo = 1; status = VersionStatus.DRAFT; sections = "{}" }
+        every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template
+        every { versionRepository.findByTemplateIdOrderByVersionNoDesc(1L) } returns listOf(draft)
+        val e = assertFailsWith<BusinessException> { service.disable("SCAN_SUMMARY") }
+        assertEquals(400, e.code)
     }
 
     @Test
