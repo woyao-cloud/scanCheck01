@@ -1,6 +1,9 @@
 package com.example.compliance.report.api
 
+import com.example.compliance.common.exception.GlobalExceptionHandler
 import com.example.compliance.report.application.ReportGenerationService
+import com.example.compliance.report.application.export.ExportArtifact
+import com.example.compliance.report.application.export.ReportExportService
 import com.example.compliance.report.domain.ReportSnapshot
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.mockk.every
@@ -11,21 +14,29 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
 
-/** M12：快照生成/查询/导出端点切片。 */
+/** M12：快照生成/查询/导出端点切片。GlobalExceptionHandler 显式 @Import：
+ *  @WebMvcTest 组件扫描以 ReportTestConfig 包（com.example.compliance.report）为根，
+ *  module-common 的 @ControllerAdvice 不在扫描范围，需显式注册才能验证 BusinessException → 400。 */
 @WebMvcTest(ReportSnapshotController::class)
 @AutoConfigureMockMvc(addFilters = false)
+@Import(GlobalExceptionHandler::class)
 class ReportSnapshotControllerTest {
 
     @Autowired lateinit var mockMvc: MockMvc
     @Autowired lateinit var generationService: ReportGenerationService
+    @Autowired lateinit var exportService: ReportExportService
 
     private val objectMapper = ObjectMapper()
 
@@ -33,6 +44,9 @@ class ReportSnapshotControllerTest {
     class GenServiceConfig {
         @Bean
         fun reportGenerationService(): ReportGenerationService = mockk()
+
+        @Bean
+        fun reportExportService(): ReportExportService = mockk()
     }
 
     private fun snapshot() = ReportSnapshot().apply {
@@ -76,5 +90,34 @@ class ReportSnapshotControllerTest {
         mockMvc.perform(get("/api/v1/reports/snapshots/3/export?format=json"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.findingCount").value(3))
+    }
+
+    @Test
+    fun `export xlsx returns binary attachment`() {
+        every { exportService.exportXlsx(3L, 1L) } returns
+            ExportArtifact("report-3-scan_summary.xlsx", byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+        mockMvc.perform(get("/api/v1/reports/snapshots/3/export?format=xlsx"))
+            .andExpect(status().isOk)
+            .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"report-3-scan_summary.xlsx\""))
+            .andExpect(content().bytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04)))
+    }
+
+    @Test
+    fun `export pdf returns binary attachment`() {
+        every { exportService.exportPdf(3L, 1L) } returns
+            ExportArtifact("report-3-scan_summary.pdf", byteArrayOf(0x25, 0x50, 0x44, 0x46))
+        mockMvc.perform(get("/api/v1/reports/snapshots/3/export?format=pdf"))
+            .andExpect(status().isOk)
+            .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/pdf"))
+            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"report-3-scan_summary.pdf\""))
+            .andExpect(content().bytes(byteArrayOf(0x25, 0x50, 0x44, 0x46)))
+    }
+
+    @Test
+    fun `unsupported export format is 400`() {
+        mockMvc.perform(get("/api/v1/reports/snapshots/3/export?format=bad"))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.code").value(400))
     }
 }
