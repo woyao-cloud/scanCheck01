@@ -783,6 +783,7 @@ git commit -m "feat(report): xlsx/pdf binary export via ReportExportService + au
 - Test: Create `module-common/src/test/kotlin/com/example/compliance/common/audit/AuditQueryServiceTest.kt`
 - Create: `module-admin/src/main/kotlin/com/example/compliance/admin/api/AuditLogView.kt`
 - Create: `module-admin/src/main/kotlin/com/example/compliance/admin/api/AuditLogController.kt`
+- Test: Create `module-admin/src/test/kotlin/com/example/compliance/admin/AdminTestConfig.kt`（`@SpringBootConfiguration` 标记，`@WebMvcTest` 需要——镜像 module-report `ReportTestConfig`；brief 缺口，Task 16.3 实现反馈）
 
 **Interfaces:**
 - Consumes: `AuditLog`（entity，字段 userId/action/module/resourceType/resourceId/ip/occurredAt，表 `audit_log`）；`AuditLogRepository : JpaRepository<AuditLog, Long>`（module-common）；`ApiResponse`/`PageView<T>`（module-common api，`PageView<T> = PageResponse<T>` typealias）；`BusinessException`（module-common）。
@@ -796,7 +797,6 @@ git commit -m "feat(report): xlsx/pdf binary export via ReportExportService + au
 package com.example.compliance.common.audit
 
 import com.example.compliance.common.exception.BusinessException
-import io.mockk.any
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -804,6 +804,7 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import org.springframework.data.domain.PageImpl
 import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.domain.Specification
 
 /** M16 (R-M16-D6)：审计查询服务——负 page 400、size 钳制、空过滤 null spec。 */
@@ -818,19 +819,19 @@ class AuditQueryServiceTest {
     }
 
     @Test
-    fun `size is clamped to 1..100`() {
-        every { repo.findAll(any<Specification<AuditLog>>(), any()) } returns
+    fun `size is clamped to 100`() {
+        every { repo.findAll(any<Specification<AuditLog>>(), any<Pageable>()) } returns
             PageImpl(emptyList(), PageRequest.of(0, 100), 0L)
         service.search(AuditLogFilter(module = "M"), 0, 500)
-        verify { repo.findAll(any<Specification<AuditLog>>(), match { it.pageSize == 100 }) }
+        verify { repo.findAll(any<Specification<AuditLog>>(), match<Pageable> { it.pageSize == 100 }) }
     }
 
     @Test
     fun `empty filter passes null specification`() {
-        every { repo.findAll(null, any()) } returns
+        every { repo.findAll(null, any<Pageable>()) } returns
             PageImpl(emptyList(), PageRequest.of(0, 20), 0L)
         service.search(AuditLogFilter(), 0, 20)
-        verify { repo.findAll(null, match { it.pageNumber == 0 }) }
+        verify { repo.findAll(null, match<Pageable> { it.pageNumber == 0 }) }
     }
 }
 ```
@@ -1037,7 +1038,7 @@ import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 
-/** 审计日志查询（spec R-M16-D5/D6/D7）：/api/v1/audit-logs 避开 /admin/** 路径守卫使 AUDITOR 可达，
+/** 审计日志查询（spec R-M16-D5/D6/D7）：/api/v1/audit-logs 避开 /admin/ 前缀路径守卫使 AUDITOR 可达，
  *  方法级 @PreAuthorize(ADMIN,AUDITOR) 双保险（SecurityConfig 无此路径规则 → 认证即可 + 方法门控）。 */
 @RestController
 @RequestMapping("/api/v1/audit-logs")
