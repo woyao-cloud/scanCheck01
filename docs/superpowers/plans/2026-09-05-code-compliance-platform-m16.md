@@ -510,7 +510,7 @@ git commit -m "feat(report): export core — SheetDef model + xlsx/pdf renderers
     }
 ```
 
-注：`addFilters = false` + 无认证 → `authentication` 为 null → actorId 兜底 1L，故 mock 参数为 `exportXlsx(3L, 1L)`。既有 `detail and export return content` 测试**不改动**——json 分支返回体形状不变。
+注：`addFilters = false` + 无认证 → `authentication` 为 null → actorId 兜底 1L，故 mock 参数为 `exportXlsx(3L, 1L)`。既有 `detail and export return content` 测试**不改动**——json 分支返回体形状不变。**另需类级注解**：`@Import(GlobalExceptionHandler::class)` + import `com.example.compliance.common.exception.GlobalExceptionHandler`——`@WebMvcTest` 扫描根在 `com.example.compliance.report`（ReportTestConfig 包），module-common 的 `@ControllerAdvice` 不在范围；本测试是首个在切片内断言 BusinessException→400 的用例，不显式注册则 400 断言 500（Task 16.2 实现反馈修正）。
 
 - [ ] **Step 2: 运行验证失败**
 
@@ -693,7 +693,6 @@ import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.infrastructure.ReportSnapshotRepository
 import io.mockk.every
-import io.mockk.match
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -799,7 +798,6 @@ package com.example.compliance.common.audit
 import com.example.compliance.common.exception.BusinessException
 import io.mockk.any
 import io.mockk.every
-import io.mockk.match
 import io.mockk.mockk
 import io.mockk.verify
 import kotlin.test.Test
@@ -998,10 +996,10 @@ Expected: FAIL（AuditLogController/AuditLogView 不存在）
 
 - [ ] **Step 7: 写最小实现（module-admin：view + controller）**
 
-创建 `module-admin/src/main/kotlin/com/example/compliance/admin/api/dto/AuditLogView.kt`：
+创建 `module-admin/src/main/kotlin/com/example/compliance/admin/api/AuditLogView.kt`：
 
 ```kotlin
-package com.example.compliance.admin.api.dto
+package com.example.compliance.admin.api
 
 import com.example.compliance.common.audit.AuditLog
 
@@ -1030,7 +1028,7 @@ data class AuditLogView(
 ```kotlin
 package com.example.compliance.admin.api
 
-import com.example.compliance.admin.api.dto.AuditLogView
+import com.example.compliance.admin.api.AuditLogView
 import com.example.compliance.common.api.ApiResponse
 import com.example.compliance.common.api.PageView
 import com.example.compliance.common.audit.AuditLogFilter
