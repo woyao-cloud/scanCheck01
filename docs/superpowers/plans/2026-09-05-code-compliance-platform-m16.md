@@ -6,13 +6,13 @@
 
 **Architecture:** 导出采用「行模型 + 双渲染器」DRY 设计（spec R-M16-D2）：`ReportExportModel.sheetsFor(snapshotType, payload)` 纯函数把不可变快照 payload → `List<SheetDef(name, rows: List<List<String>>)>`（类型感知：SCAN_SUMMARY 单表 / COMPLIANCE Summary+Items 双表 / TREND 时序表 / 兜底键值表；根元素对象/数组双形态），`XlsxRenderer`（POI XSSFWorkbook）与 `PdfRenderer`（OpenPDF）只负责把行模型吐成字节——结构映射与输出解耦，两渲染器零重复。`ReportExportService` 编排：只读载入快照 → 渲染 → 写审计 `REPORT_EXPORT`（REQUIRES_NEW 既有模式），返回 `ExportArtifact(filename, bytes)`；控制器对 xlsx/pdf 返回二进制 `ResponseEntity<Any>`（Content-Type + `Content-Disposition: attachment`），json/html 保持 `{data:...}` 封装不变。审计查询按 spec R-M16-D5/D6：`AuditQueryService`（module-common，临近审计领域）+ JPA `Specification` 多可选 AND + 空过滤 null spec（全量），`AuditLogController`（module-admin，跨模块只读聚合宿主）路径 `/api/v1/audit-logs` 避开 `/admin/**` 路径守卫使 AUDITOR 可达，方法级 `@PreAuthorize("hasAnyRole('ADMIN','AUDITOR')")` 双保险。
 
-**Tech Stack:** Apache POI `poi-ooxml`（**无显式版本**——convention plugin 对每模块应用 `spring-boot-dependencies:3.3.5` BOM，Boot 管 5.2.5）；OpenPDF `com.github.librepdf:openpdf`（**不在 Boot BOM，版本目录显式 pin `1.3.43`**）；Spring Data JPA `Specification`（module-common 已有 `api(spring-boot-starter-data-jpa)`）；JUnit 5 + MockK + kotlin-test（convention plugin 全局 test 依赖）。无 DDL、无新配置。
+**Tech Stack:** Apache POI `poi-ooxml`（**版本目录显式 pin `5.2.5`**——Spring Boot 3.3.5 BOM 不管理 POI，grep 实测 0 条目，原「BOM 管版本」假设有误，Task 16.1 实现反馈修正）；OpenPDF `com.github.librepdf:openpdf`（**不在 Boot BOM，版本目录显式 pin `1.3.43`**）；Spring Data JPA `Specification`（module-common 已有 `api(spring-boot-starter-data-jpa)`）；JUnit 5 + MockK + kotlin-test（convention plugin 全局 test 依赖）。无 DDL、无新配置。
 
 **Spec:** `docs/superpowers/specs/2026-09-05-code-compliance-platform-m16-design.md`（本计划从 spec 论证；执行者须同时读 spec 与计划，冲突以 spec 为权威）
 
 ## Global Constraints
 
-- **依赖边界**：module-report 增 `implementation(libs.poi.ooxml)`（BOM 管版本）+ `implementation(libs.openpdf)`（版本目录 pin 1.3.43，catalog 增 `[versions] openpdf` + 两 library 条目）；module-common 增 **AuditQueryService/AuditLogFilter 两个类**（既有 spring-data-jpa api 依赖已足，零新依赖——「M-series frozen」指运行依赖，不含类）；module-admin 复用既有对 module-common 的依赖；**app-server 不引入 POI**（module-report 的 `implementation` 不透传——集成测试做字节级魔数验证而非 XSSFWorkbook 回读）。
+- **依赖边界**：module-report 增 `implementation(libs.poi.ooxml)`（**版本目录 pin 5.2.5**——Spring Boot 3.x BOM 不再管理 POI）+ `implementation(libs.openpdf)`（版本目录 pin 1.3.43，catalog 增 `[versions] poi/openpdf` + 两 library 条目）；module-common 增 **AuditQueryService/AuditLogFilter 两个类**（既有 spring-data-jpa api 依赖已足，零新依赖——「M-series frozen」指运行依赖，不含类）；module-admin 复用既有对 module-common 的依赖；**app-server 不引入 POI**（module-report 的 `implementation` 不透传——集成测试做字节级魔数验证而非 XSSFWorkbook 回读）。
 - **行模型契约（R-M16-D2）**：`data class SheetDef(val name: String, val rows: List<List<String>>)`；`ReportExportModel.sheetsFor(snapshotType, payload): List<SheetDef>`——SCAN_SUMMARY → 单表 `ScanSummary`；COMPLIANCE → 双表 `Summary` + `Items`；TREND → 单表 `Trend`（**payload 根为 JSON 数组**，`root.isArray` 分支）；未知类型/非法 payload → 兜底 `Data`（对象→Key/Value，数组→Index/Value，其余→仅表头）。`score` 等可空数值经 `cell()` 空值→空串（`node.isNull` 检查，避免 `asText()` 产字面 "null"）；`bySeverity` 键大小写双态防御（`get(key) ?: get(key.lowercase())`），缺省补 "0"。
 - **导出产物（R-M16-P1，spec §3.2 精化）**：`ReportExportService` 返回 `data class ExportArtifact(val filename: String, val bytes: ByteArray)`——spec §3.2 的 `exportXlsx(id, actorId): ByteArray` 缺文件名；控制器 Content-Disposition 需要 `snapshotType`，故服务返回产物对象（filename = `report-<id>-<snapshotType.lowercase()>.<ext>`）。
 - **PDF 渲染签名（R-M16-P2）**：`PdfRenderer.render(title: String, meta: String, sheets: List<SheetDef>): ByteArray`——title/meta 是 PDF 段落（非表行）；每 SheetDef 一个 `PdfPTable`（首非空行定列数，空表跳过）。
@@ -141,23 +141,24 @@ Expected: FAIL（Unresolved reference / class not found）
 
 - [ ] **Step 3: 加依赖（catalog + module-report build）**
 
-`gradle/libs.versions.toml` `[versions]` 段追加一行：
+`gradle/libs.versions.toml` `[versions]` 段追加两行（**poi 显式 pin**——Spring Boot 3.3.5 BOM 不管理 POI，grep 实测 0 条目）：
 
 ```toml
+poi = "5.2.5"
 openpdf = "1.3.43"
 ```
 
-`gradle/libs.versions.toml` `[libraries]` 段追加两行（**poi-ooxml 不带 version.ref**——Boot BOM 管版本；openpdf 必须 pin）：
+`gradle/libs.versions.toml` `[libraries]` 段追加两行（**poi 与 openpdf 均显式 pin**）：
 
 ```toml
-poi-ooxml = { module = "org.apache.poi:poi-ooxml" }
+poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
 openpdf = { module = "com.github.librepdf:openpdf", version.ref = "openpdf" }
 ```
 
 `module-report/build.gradle.kts` `dependencies` 块追加（放在 `implementation(project(":module-checklist"))` 之后、`testImplementation(...)` 之前）：
 
 ```kotlin
-    // M16 导出：xlsx 由 spring-boot-dependencies BOM 管版本；openpdf 不在 BOM，版本目录显式 pin
+    // M16 导出：poi/openpdf 都不在 spring-boot-dependencies BOM，版本目录显式 pin
     implementation(libs.poi.ooxml)
     implementation(libs.openpdf)
 ```
@@ -248,11 +249,11 @@ object ReportExportModel {
         when {
             root.isArray -> {
                 header = ARRAY_FALLBACK_HEADER
-                rows = root.mapIndexed { i, v -> listOf(i.toString(), v.asText()) }
+                rows = root.mapIndexed { i, v -> listOf(i.toString(), if (v.isNull) "" else v.asText()) }
             }
             root.isObject -> {
                 header = FALLBACK_HEADER
-                rows = root.fields().asSequence().map { (k, v) -> listOf(k, v.asText()) }.toList()
+                rows = root.fields().asSequence().map { (k, v) -> listOf(k, if (v.isNull) "" else v.asText()) }.toList()
             }
             else -> {
                 header = FALLBACK_HEADER
@@ -425,7 +426,7 @@ class PdfRendererTest {
         val reader = PdfReader(bytes)
         try {
             assertEquals(1, reader.numberOfPages)
-            val text = PdfTextExtractor.getTextFromPage(reader, 1)
+            val text = PdfTextExtractor(reader).getTextFromPage(1) // OpenPDF 1.3.43：PdfTextExtractor 为实例 API（iText 5 静态形式已移除）
             assertTrue("Report #3 (COMPLIANCE)" in text)
             assertTrue("A" in text)
         } finally {
