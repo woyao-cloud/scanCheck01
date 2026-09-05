@@ -1122,6 +1122,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.http.MediaType
 import org.springframework.security.test.context.support.WithMockUser
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
@@ -1146,22 +1147,37 @@ class M16ReportExportIntegrationTest : AbstractIntegrationTest() {
 
     private val payload = """{"projectId":5,"evaluationId":7,"score":88.5,"totalItems":2,"passed":1,"failed":1,"warning":0,"manual":0,"skipped":0,"checklistVersionId":9,"items":[{"itemCode":"M16-IT-1","result":"PASS","findingCount":0},{"itemCode":"M16-IT-2","result":"FAIL","findingCount":3}]}"""
 
+    // 计数须放 companion（JUnit5 默认 PER_METHOD：实例字段每次测试重置 → 固定 code 第二次起抛
+    // "project code already exists"）。M10AdminIntegrationTest 同款实证修正先例（brief 固定 M16RP 有缺陷）。
+    companion object {
+        @JvmStatic
+        private var seedCounter = 0
+    }
+
     private fun seedSnapshot(): Long {
-        val project = projectService.create(CreateProjectCommand("M16RP", "M16 report", null, null))
+        seedCounter++
+        val project = projectService.create(CreateProjectCommand("M16RP$seedCounter", "M16 report", null, null))
+        // 模板 draft/publish 需 ADMIN/COMPLIANCE_MANAGER（SecurityConfig /api/v1/reports/templates/**），
+        // 而导出测试方法以 @WithMockUser(DEVELOPER) 认证——播种请求显式提权 ADMIN（M12 同款 .with 覆盖模式）。
+        val admin = SecurityMockMvcRequestPostProcessors.user("m16-admin").roles("ADMIN")
         val draftResp = mockMvc.perform(post("/api/v1/reports/templates/COMPLIANCE/draft")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"name":"M16 compliance","sections":{"sections":[{"title":"Summary"}]}}"""))
+                .content("""{"name":"M16 compliance","sections":{"sections":[{"title":"Summary"}]}}""")
+                .with(admin))
             .andExpect(status().isOk)
             .andReturn()
-        val templateId = objectMapper.readTree(draftResp.response.contentAsString)["data"]["templateId"].asLong()
-        mockMvc.perform(post("/api/v1/reports/templates/COMPLIANCE/publish"))
+        val tplId = objectMapper.readTree(draftResp.response.contentAsString)["data"]["templateId"].asLong()
+        mockMvc.perform(post("/api/v1/reports/templates/COMPLIANCE/publish").with(admin))
             .andExpect(status().isOk)
+        // apply 隐式接收者遮蔽：RHS `templateId`/`payload` 会解析到 ReportSnapshot 自身成员
+        // （templateId 静默赋 0 / payload 是未初始化 lateinit → UninitializedPropertyAccessException），
+        // 必须改名或加标签限定以引用外层作用域（16.4 实证修正 brief 代码）。
         val saved = snapshotRepository.save(ReportSnapshot().apply {
-            this.templateId = templateId
+            this.templateId = tplId
             templateVersionNo = 1
             this.projectId = project.id
             snapshotType = "COMPLIANCE"
-            this.payload = payload
+            this.payload = this@M16ReportExportIntegrationTest.payload
             generatedBy = 1L
             generatedAt = Instant.now()
         })
@@ -1202,8 +1218,11 @@ class M16ReportExportIntegrationTest : AbstractIntegrationTest() {
         val exportAudits = auditLogRepository.findAll().filter { it.action == "REPORT_EXPORT" && it.resourceId == id }
         assertEquals(2, exportAudits.size, "xlsx + pdf 两次导出各留一条审计")
         assertTrue(exportAudits.all { it.module == "report" && it.resourceType == "report_snapshot" })
-        assertTrue(exportAudits.any { it.detail!!.contains("\"format\":\"xlsx\"") })
-        assertTrue(exportAudits.any { it.detail!!.contains("\"format\":\"pdf\"") })
+        // 实证：PG jsonb 规范化空白（"format": "xlsx" 冒号后有空格），brief 的逐字 contains("\"format\":\"xlsx\"")
+        // 对活库永不命中 → 改为解析 detail JSON 断言 format 字段（16.4 实证修正，语义等价且不受 jsonb 规范化影响）。
+        val formats = exportAudits.map { objectMapper.readTree(it.detail!!)["format"].asText() }
+        assertTrue("xlsx" in formats, "xlsx format audit detail missing: " + exportAudits.map { it.detail })
+        assertTrue("pdf" in formats, "pdf format audit detail missing: " + exportAudits.map { it.detail })
     }
 
     @Test
