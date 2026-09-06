@@ -67,7 +67,8 @@ class M18NotificationRetryIntegrationTest : AbstractIntegrationTest() {
 
         publisher.publishEvent(ScanCompletedEvent(2001L, projectId, "SUCCESS"))
 
-        // 首投失败：WEBHOOK 行 FAILED + retryCount=1 + next_retry_at 已排程（EMAIL 行同样 FAILED 但 next_retry_at 未到）
+        // 首投失败：仅 webhook stub 故障 → WEBHOOK 行 FAILED + retryCount=1 + next_retry_at 已排程
+        // （EMAIL 行 SENT —— mail stub 未设 failWith，不受影响；本测试只断言 webhook 行）
         val failed = webhookRows("SCAN_COMPLETED").maxByOrNull { it.id!! }!!
         assertEquals("FAILED", failed.status)
         assertEquals(1, failed.retryCount)
@@ -113,10 +114,16 @@ class M18NotificationRetryIntegrationTest : AbstractIntegrationTest() {
         assertNull(capped.nextRetryAt)
         assertTrue(capped.errorMessage!!.contains("max attempts reached"))
 
-        val postsAfterCap = webhookStub.posts.size
+        // R1 加固：第二次 run 前清空 stub 失败开关 —— 若 max-attempts 守卫被移除而误重投，会真实落 post/改状态，
+        // 而非被 throw 掩盖（弱空转）。直接状态断言（stub 无关、最强）：达上限行不被第二次 run 触碰。
+        webhookStub.failWith = null
+        val postsBeforeSecondRun = webhookStub.posts.size
         retryJob.retryFailed()   // 不再候选（retryCount 5 !< 5）
-        assertEquals(postsAfterCap, webhookStub.posts.size)   // 未再投递
-        assertEquals("FAILED", webhookRows("SCAN_COMPLETED").maxByOrNull { it.id!! }!!.status)
+        val after = webhookRows("SCAN_COMPLETED").maxByOrNull { it.id!! }!!
+        assertEquals("FAILED", after.status)          // 若误重投且成功 → SENT，本断言失败
+        assertEquals(5, after.retryCount)             // 若误重投且失败 → retryCount 6，本断言失败
+        assertNull(after.nextRetryAt)                 // 若误重投且失败 → next_retry_at 被排程，本断言失败
+        assertEquals(postsBeforeSecondRun, webhookStub.posts.size)   // 未再投递
     }
 
     @TestConfiguration
