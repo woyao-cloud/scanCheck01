@@ -28,4 +28,5 @@ dependencies {
     testImplementation(libs.testcontainers.junit.jupiter)
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.spring.security.test)
+    testImplementation(libs.spring.boot.starter.mail)   // M17 集成测试 StubJavaMailSender 直接引用 JavaMailSender/jakarta.mail（Ruling PL-M17-7）
 }
