@@ -15,12 +15,14 @@ import java.io.InputStream
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class EmailSenderTest {
     private val provider = mockk<ObjectProvider<JavaMailSender>>()
     private val repository = mockk<NotificationRepository>()
-    private val sender = EmailSender(provider, repository)
+    private val retryBackoff = NotificationRetryBackoff(maxAttempts = 5)
+    private val sender = EmailSender(provider, repository, retryBackoff)
 
     private fun row() = Notification().apply {
         id = 1L; channel = Channel.EMAIL.name; recipient = "a@x.com"; type = "SCAN_COMPLETED"
@@ -28,14 +30,17 @@ class EmailSenderTest {
     }
 
     @Test
-    fun `send builds mime and marks sent`() {
+    fun `send builds mime and marks sent clearing retry fields`() {
         val stub = StubJavaMailSender()
         every { provider.getIfAvailable() } returns stub
         every { repository.save(any()) } answers { firstArg() }
         val row = row()
+        row.errorMessage = "prev"; row.nextRetryAt = java.time.Instant.now()   // 失败遗留 → 成功应清除
         sender.send(row)
         assertEquals("SENT", row.status)
         assertNotNull(row.sentAt)
+        assertNull(row.errorMessage)
+        assertNull(row.nextRetryAt)
         assertEquals(1, stub.sent.size)
         assertEquals("a@x.com", stub.sent.single().getRecipients(jakarta.mail.Message.RecipientType.TO)?.first()?.toString())
         assertEquals("scan completed", stub.sent.single().subject)
@@ -43,7 +48,7 @@ class EmailSenderTest {
     }
 
     @Test
-    fun `send failure marks failed with retry and error`() {
+    fun `send failure marks failed with retry error and backoff gate`() {
         val stub = StubJavaMailSender()
         stub.failWith = RuntimeException("smtp down")
         every { provider.getIfAvailable() } returns stub
@@ -52,7 +57,8 @@ class EmailSenderTest {
         sender.send(row)
         assertEquals("FAILED", row.status)
         assertEquals(1, row.retryCount)
-        assertTrue(!row.errorMessage.isNullOrBlank())
+        assertEquals("smtp down", row.errorMessage)
+        assertNotNull(row.nextRetryAt)   // 退避门已排程（R-M18-6）
     }
 
     @Test
