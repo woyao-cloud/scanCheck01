@@ -3,46 +3,66 @@ package com.example.compliance.notification.application
 import com.example.compliance.notification.domain.Channel
 import com.example.compliance.notification.domain.Notification
 import com.example.compliance.notification.infrastructure.NotificationRepository
+import com.example.compliance.user.infrastructure.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 
-/** 通知服务：落库实现（站内信表预留）。M10 I4：升级为 NotificationSender 实现，每个接收人一行。 */
+/** M17 通知服务（spec R-M17-D4）：事件 → 站内信落库 + EMAIL/Webhook 真实渠道投递。
+ *  REQUIRES_NEW：通知写入必须在独立事务 —— 发布方事务内同步 @EventListener 调用本方法时，
+ *  通知失败仅回滚通知自身，绝不标记发布方事务 rollback-only（spec §6.4 best-effort）。
+ *  收件人解析第二层（R-M17-D2）：userId → email；第一层「事件→userId」在 NotificationEventListener。 */
 @Service
 class NotificationService(
     private val repository: NotificationRepository,
-) : NotificationSender {
-
-    // send 经 LogNotificationSender 委托（Spring 代理）调用 → 代理上 @Transactional 生效，单事务批量落库
-    // （self-invocation 绕过代理：persist 的 @Transactional 在 send 内不生效，故 send 自身必须标注）
-    // REQUIRES_NEW：通知写入必须在独立事务 —— 发布方事务内同步 @EventListener 调用本方法时，
-    // 若加入发布方事务（REQUIRED），persist 失败会把发布方事务标 rollback-only，提交时抛
-    // UnexpectedRollbackException，违反 spec §6.4 best-effort（失败不影响主流程）。
-    // REQUIRES_NEW 挂起发布方事务、通知失败仅回滚通知自身（final-review Finding 2 硬化）。
+    private val userRepository: UserRepository,
+    private val emailSender: EmailSender,
+    private val webhookSender: WebhookSender,
+) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    override fun send(channel: Channel, subject: String, body: String, recipients: List<Long>) {
-        recipients.forEach { persist(channel, it.toString(), subject, body) }
+    fun notify(notificationType: String, title: String, body: String, recipients: List<Long>) {
+        val unique = recipients.distinct()
+        if (unique.isEmpty()) return
+        val occurredAt = Instant.now()
+        unique.forEach { userId ->
+            // IN_APP：每收件人一行，落库即投递（SENT + sentAt）
+            repository.save(Notification().apply {
+                channel = Channel.IN_APP.name
+                recipient = userId.toString()
+                type = notificationType
+                this.title = title
+                content = body
+                status = "SENT"
+                sentAt = occurredAt
+            })
+            // EMAIL：仅对有邮箱用户建行；mail sender 未配置 → 跳过（镜像 webhook 未配置，Ruling PL-M17-3）
+            if (emailSender.isAvailable()) {
+                val email = userRepository.findById(userId).orElse(null)?.email
+                if (!email.isNullOrBlank()) {
+                    val row = repository.save(Notification().apply {
+                        channel = Channel.EMAIL.name
+                        recipient = email
+                        type = notificationType
+                        this.title = title
+                        content = body
+                        status = "PENDING"
+                    })
+                    emailSender.send(row)   // sender 自身吞掉异常 → SENT/FAILED，不抛出
+                }
+            }
+        }
+        // WEBHOOK：每事件一行；url 未配置 → 跳过
+        if (webhookSender.isConfigured()) {
+            val row = repository.save(Notification().apply {
+                channel = Channel.WEBHOOK.name
+                recipient = "webhook"
+                type = notificationType
+                this.title = title
+                content = body
+                status = "PENDING"
+            })
+            webhookSender.send(row, unique, occurredAt)
+        }
     }
-
-    @Transactional
-    fun persist(channel: Channel, recipient: String, title: String, content: String?): Notification {
-        val pending = repository.save(Notification().apply {
-            this.channel = channel.name
-            this.recipient = recipient
-            type = "EVENT"
-            this.title = title
-            this.content = content
-            status = "PENDING"
-        })
-        // 渠道适配器扩展点：M9/M10 直接视为发送成功
-        pending.status = "SENT"
-        pending.sentAt = Instant.now()
-        return repository.save(pending)
-    }
-
-    @Transactional(readOnly = true)
-    fun list(recipient: String?): List<Notification> =
-        if (recipient.isNullOrBlank()) repository.findAll()
-        else repository.findByRecipient(recipient)
 }
