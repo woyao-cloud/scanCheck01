@@ -9,6 +9,7 @@ import com.example.compliance.result.domain.FindingStatusSnapshot
 import com.example.compliance.result.infrastructure.FindingEvidenceRepository
 import com.example.compliance.result.infrastructure.FindingRepository
 import com.example.compliance.result.infrastructure.FindingStatusSnapshotRepository
+import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -23,6 +24,8 @@ class FindingLifecycleService(
     private val auditService: AuditService,
     private val eventPublisher: ApplicationEventPublisher,
 ) : FindingLifecyclePort {
+
+    private val log = LoggerFactory.getLogger(FindingLifecycleService::class.java)
 
     override fun findingsForScanTask(scanTaskId: Long): List<FindingView> =
         findingRepository.findByProjectScanTask(scanTaskId).map { it.toView() }
@@ -76,7 +79,9 @@ class FindingLifecycleService(
                 }
             }
         if (regressedIds.isNotEmpty()) {
-            eventPublisher.publishEvent(FindingRegressionEvent(projectId, scanTaskId, regressedIds))
+            // M18 (M4): 发布侧 runCatching 双保险统一 —— 事件发布失败仅日志，不阻断 verifyRechecking
+            runCatching { eventPublisher.publishEvent(FindingRegressionEvent(projectId, scanTaskId, regressedIds)) }
+                .onFailure { log.warn("publish finding regression event failed: {}", it.message) }
         }
         return VerifyResult(closed, regressed)
     }

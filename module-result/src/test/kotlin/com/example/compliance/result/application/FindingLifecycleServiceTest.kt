@@ -123,4 +123,22 @@ class FindingLifecycleServiceTest {
         val mixed = service.findingsGlobal(projectId = 9L, status = null, severity = "hIgH")
         assertEquals(listOf(1L), mixed.map { it.id })
     }
+
+    @Test
+    fun `verifyRechecking survives publish event failure`() {
+        // M4：事件发布抛异常（publisher 故障）→ runCatching 吞掉，验证流程不受影响（best-effort 双保险）
+        val fixed1 = Finding().apply { id = 1L; projectId = 5L; status = FindingStatus.RECHECKING; fingerprint = "f1" }
+        every { findingRepository.findAll() } returns listOf(fixed1)
+        every { findingRepository.save(any()) } answers { firstArg() }
+        every { findingRepository.findById(any()) } answers { firstArg<Long>().let { id ->
+            java.util.Optional.of(listOf(fixed1).first { it.id == id })
+        } }
+        every { statusRepository.save(any()) } answers { firstArg() }
+        every { eventPublisher.publishEvent(any<Any>()) } throws RuntimeException("publish down")
+
+        val result = service.verifyRechecking(5L, 99L, presentFindingIds = setOf(1L), targetFindingIds = setOf(1L))
+
+        assertEquals(VerifyResult(closed = 0, regressed = 1), result)
+        assertEquals(FindingStatus.CONFIRMED, fixed1.status)
+    }
 }
