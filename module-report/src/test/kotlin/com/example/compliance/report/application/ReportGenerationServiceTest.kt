@@ -1,6 +1,7 @@
 package com.example.compliance.report.application
 
 import com.example.compliance.checklist.domain.VersionStatus
+import com.example.compliance.common.event.ReportSnapshotGeneratedEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.domain.ReportTemplate
@@ -13,6 +14,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Pageable
 import java.math.BigDecimal
 import java.util.Optional
@@ -26,7 +28,8 @@ class ReportGenerationServiceTest {
     private val templateRepository = mockk<ReportTemplateRepository>(relaxed = true)
     private val versionRepository = mockk<ReportTemplateVersionRepository>(relaxed = true)
     private val snapshotRepository = mockk<ReportSnapshotRepository>(relaxed = true)
-    private val service = ReportGenerationService(reportService, templateRepository, versionRepository, snapshotRepository)
+    private val eventPublisher = mockk<ApplicationEventPublisher>(relaxed = true)
+    private val service = ReportGenerationService(reportService, templateRepository, versionRepository, snapshotRepository, eventPublisher)
     private val mapper = ObjectMapper()
 
     private fun template(type: String) = ReportTemplate().apply { id = 1L; this.templateType = type; name = type.lowercase() }
@@ -39,7 +42,7 @@ class ReportGenerationServiceTest {
         every { templateRepository.findByTemplateType("SCAN_SUMMARY") } returns template("SCAN_SUMMARY")
         every { versionRepository.findFirstByTemplateIdAndStatusOrderByIdDesc(1L, VersionStatus.PUBLISHED) } returns published()
         every { reportService.scanSummary(77L) } returns ScanSummary(77L, "SEMGREP", "SUCCESS", 3, mapOf("HIGH" to 2, "MEDIUM" to 1))
-        every { snapshotRepository.save(any()) } answers { firstArg() }
+        every { snapshotRepository.save(any()) } answers { firstArg<ReportSnapshot>().also { it.id = 5L } }
 
         val snapshot = service.generate("SCAN_SUMMARY", projectId = null, scanTaskId = 77L, generatedBy = 3L)
         assertEquals(2, snapshot.templateVersionNo)
@@ -48,6 +51,9 @@ class ReportGenerationServiceTest {
         assertEquals("SCAN_SUMMARY", snapshot.snapshotType)
         assertTrue(snapshot.payload.contains("findingCount"))
         assertTrue(snapshot.payload.contains("SEMGREP"))
+        verify {
+            eventPublisher.publishEvent(match<Any> { it is ReportSnapshotGeneratedEvent && it.snapshotId == 5L && it.projectId == null && it.snapshotType == "SCAN_SUMMARY" })
+        }
     }
 
     @Test
@@ -58,12 +64,15 @@ class ReportGenerationServiceTest {
             88L, 6L, checklistVersionId = 4L, score = BigDecimal("80.00"), totalItems = 10,
             passed = 8, failed = 2, warning = 0, manual = 0, skipped = 0, items = emptyList(),
         )
-        every { snapshotRepository.save(any()) } answers { firstArg() }
+        every { snapshotRepository.save(any()) } answers { firstArg<ReportSnapshot>().also { it.id = 5L } }
 
         val snapshot = service.generate("COMPLIANCE", projectId = 88L, scanTaskId = null, generatedBy = null)
         assertEquals(88L, snapshot.projectId)
         assertEquals(4L, snapshot.checklistVersionId)
         assertTrue(snapshot.payload.contains("80.00"))
+        verify {
+            eventPublisher.publishEvent(match<Any> { it is ReportSnapshotGeneratedEvent && it.snapshotId == 5L && it.projectId == 88L && it.snapshotType == "COMPLIANCE" })
+        }
     }
 
     @Test
@@ -71,11 +80,14 @@ class ReportGenerationServiceTest {
         every { templateRepository.findByTemplateType("TREND") } returns template("TREND")
         every { versionRepository.findFirstByTemplateIdAndStatusOrderByIdDesc(1L, VersionStatus.PUBLISHED) } returns published()
         every { reportService.trend(88L, 30) } returns listOf(TrendPoint("2026-09-01T00:00:00Z", BigDecimal("80.00"), 2))
-        every { snapshotRepository.save(any()) } answers { firstArg() }
+        every { snapshotRepository.save(any()) } answers { firstArg<ReportSnapshot>().also { it.id = 5L } }
 
         val snapshot = service.generate("TREND", projectId = 88L, scanTaskId = null, generatedBy = null)
         assertTrue(snapshot.payload.startsWith("["))        // TrendPoint 列表 → JSON 数组（序列化字段为 evaluatedAt/score/failed）
         assertTrue(snapshot.payload.contains("evaluatedAt"))
+        verify {
+            eventPublisher.publishEvent(match<Any> { it is ReportSnapshotGeneratedEvent && it.snapshotId == 5L && it.projectId == 88L && it.snapshotType == "TREND" })
+        }
     }
 
     @Test

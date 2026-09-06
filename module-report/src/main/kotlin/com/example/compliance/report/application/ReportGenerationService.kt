@@ -1,12 +1,14 @@
 package com.example.compliance.report.application
 
 import com.example.compliance.checklist.domain.VersionStatus
+import com.example.compliance.common.event.ReportSnapshotGeneratedEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.report.domain.ReportSnapshot
 import com.example.compliance.report.infrastructure.ReportSnapshotRepository
 import com.example.compliance.report.infrastructure.ReportTemplateRepository
 import com.example.compliance.report.infrastructure.ReportTemplateVersionRepository
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
@@ -21,6 +23,7 @@ class ReportGenerationService(
     private val templateRepository: ReportTemplateRepository,
     private val versionRepository: ReportTemplateVersionRepository,
     private val snapshotRepository: ReportSnapshotRepository,
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
     private val objectMapper = ObjectMapper()
 
@@ -52,7 +55,7 @@ class ReportGenerationService(
                 payload = objectMapper.writeValueAsString(reportService.trend(projectId!!, 30))
             }
         }
-        return snapshotRepository.save(ReportSnapshot().apply {
+        val snapshot = snapshotRepository.save(ReportSnapshot().apply {
             this.templateId = template.id!!
             templateVersionNo = version.versionNo
             this.projectId = projectId
@@ -63,6 +66,9 @@ class ReportGenerationService(
             this.generatedBy = generatedBy
             this.generatedAt = Instant.now()
         })
+        // M17：快照就绪事件（best-effort —— 监听器失败不得回滚快照生成，Ruling PL-M17-8）
+        runCatching { eventPublisher.publishEvent(ReportSnapshotGeneratedEvent(snapshot.id!!, projectId, type)) }
+        return snapshot
     }
 
     @Transactional(readOnly = true)

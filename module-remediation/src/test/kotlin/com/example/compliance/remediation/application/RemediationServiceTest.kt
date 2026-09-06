@@ -1,5 +1,7 @@
 package com.example.compliance.remediation.application
 
+import com.example.compliance.common.event.RemediationAssignedEvent
+import com.example.compliance.common.event.RemediationCompletedEvent
 import com.example.compliance.common.event.RemediationWaiverEvent
 import com.example.compliance.remediation.domain.RemediationTask
 import com.example.compliance.remediation.infrastructure.RemediationTaskRepository
@@ -49,6 +51,7 @@ class RemediationServiceTest {
         assertEquals(FindingStatus.ASSIGNED, result.task?.status)   // 镜像
         assertEquals(3L, result.task?.assigneeUserId)
         verify { lifecyclePort.transition(7L, FindingStatus.ASSIGNED, "assigned", 9L) }
+        verify { eventPublisher.publishEvent(match<Any> { it is RemediationAssignedEvent && it.findingId == 7L && it.projectId == 9L && it.assigneeId == 3L }) }
     }
 
     @Test
@@ -94,6 +97,7 @@ class RemediationServiceTest {
 
         assertEquals(FindingStatus.FIXED, result.finding.status)
         verify { lifecyclePort.addEvidence(7L, "FIX_COMMIT", "deadbeef", 9L) }
+        verify { eventPublisher.publishEvent(match<Any> { it is RemediationCompletedEvent && it.findingId == 7L && it.actorId == 9L && it.assigneeId == null }) }
     }
 
     @Test
@@ -127,6 +131,7 @@ class RemediationServiceTest {
 
         val result = service.markFixed(7L, 9L, false, "FIX_COMMIT", "deadbeef")
         assertEquals(FindingStatus.FIXED, result.finding.status)
+        verify { eventPublisher.publishEvent(match<Any> { it is RemediationCompletedEvent && it.assigneeId == 9L }) }
     }
 
     @Test

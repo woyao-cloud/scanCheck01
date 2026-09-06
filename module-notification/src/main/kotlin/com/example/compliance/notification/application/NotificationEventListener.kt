@@ -1,7 +1,11 @@
 package com.example.compliance.notification.application
 
 import com.example.compliance.common.event.FindingRegressionEvent
+import com.example.compliance.common.event.RemediationAssignedEvent
+import com.example.compliance.common.event.RemediationCompletedEvent
 import com.example.compliance.common.event.RemediationWaiverEvent
+import com.example.compliance.common.event.ReportSnapshotGeneratedEvent
+import com.example.compliance.common.event.ScanCompletedEvent
 import com.example.compliance.project.infrastructure.ProjectRepository
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
@@ -33,6 +37,36 @@ class NotificationEventListener(
         notificationService.notify(
             "REMEDIATION_WAIVER", "finding waived",
             "finding ${e.findingId} 被豁免（${e.reason}）", listOf(e.actorId),
+        )
+    }
+
+    @EventListener
+    fun onScanCompleted(e: ScanCompletedEvent) = safe("scan project=${e.projectId}") {
+        ownerRecipient(e.projectId)?.let { owner ->
+            notificationService.notify("SCAN_COMPLETED", "scan completed", "扫描 ${e.scanTaskId} 完成：${e.status}", listOf(owner))
+        }
+    }
+
+    @EventListener
+    fun onReportSnapshotGenerated(e: ReportSnapshotGeneratedEvent) = safe("report snapshot project=${e.projectId}") {
+        e.projectId?.let { projectId -> ownerRecipient(projectId) }?.let { owner ->
+            notificationService.notify(
+                "REPORT_SNAPSHOT_GENERATED", "report snapshot generated",
+                "快照 ${e.snapshotId} 已生成（${e.snapshotType}）", listOf(owner),
+            )
+        }
+    }
+
+    @EventListener
+    fun onRemediationAssigned(e: RemediationAssignedEvent) = safe("remediation assigned finding=${e.findingId}") {
+        notificationService.notify("REMEDIATION_ASSIGNED", "remediation assigned", "finding ${e.findingId} 已指派给你", listOf(e.assigneeId))
+    }
+
+    @EventListener
+    fun onRemediationCompleted(e: RemediationCompletedEvent) = safe("remediation completed finding=${e.findingId}") {
+        notificationService.notify(
+            "REMEDIATION_COMPLETED", "remediation completed",
+            "finding ${e.findingId} 已标记完成", listOfNotNull(e.actorId, e.assigneeId).distinct(),
         )
     }
 

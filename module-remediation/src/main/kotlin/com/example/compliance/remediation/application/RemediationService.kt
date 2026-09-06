@@ -1,5 +1,7 @@
 package com.example.compliance.remediation.application
 
+import com.example.compliance.common.event.RemediationAssignedEvent
+import com.example.compliance.common.event.RemediationCompletedEvent
 import com.example.compliance.common.event.RemediationWaiverEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.remediation.domain.RemediationTask
@@ -44,7 +46,12 @@ class RemediationService(
         val newStatus = lifecyclePort.transition(findingId, FindingStatus.ASSIGNED, "assigned", actorId)
         task.status = newStatus   // 镜像：task.status 跟随权威 transition 的返回
         // 响应 finding 也回显权威状态（P2-D4 镜像：finding.status == task.status），避免返回派单前旧视图
-        return FindingRemediationView(finding.copy(status = newStatus), taskRepository.save(task).toView())
+        val view = FindingRemediationView(finding.copy(status = newStatus), taskRepository.save(task).toView())
+        // M17：首次指派且指定受让人 → 指派事件（Ruling PL-M17-6；best-effort，Ruling PL-M17-8）
+        if (existing == null && assigneeUserId != null) {
+            runCatching { eventPublisher.publishEvent(RemediationAssignedEvent(finding.id, finding.projectId, assigneeUserId)) }
+        }
+        return view
     }
 
     @Transactional(readOnly = true)
@@ -102,7 +109,12 @@ class RemediationService(
             throw BusinessException(403, "only the assignee can mark fixed")
         }
         lifecyclePort.addEvidence(findingId, evidenceType, evidenceRef, actorId)
-        return mirrorTransition(findingId, FindingStatus.FIXED, "fixed", actorId)
+        val view = mirrorTransition(findingId, FindingStatus.FIXED, "fixed", actorId)
+        // M17：整改完成事件（best-effort）—— actor 必收，assignee 若存在则并列
+        runCatching {
+            eventPublisher.publishEvent(RemediationCompletedEvent(findingId, finding.projectId, actorId, assignee))
+        }
+        return view
     }
 
     /** 追加证据（无转移）。 */
@@ -143,7 +155,8 @@ class RemediationService(
         val view = mirrorTransition(findingId, to, reason, actorId)
         // M10 I4：WAIVED 终态发布豁免事件（best-effort，失败由监听器 runCatching 吞掉，不影响本事务）
         if (to == FindingStatus.WAIVED) {
-            eventPublisher.publishEvent(RemediationWaiverEvent(finding.projectId, findingId, actorId, reason))
+            // M17 硬化：publish 失败也不得回滚 WAIVED 终态（spec red line，Ruling PL-M17-8）
+            runCatching { eventPublisher.publishEvent(RemediationWaiverEvent(finding.projectId, findingId, actorId, reason)) }
         }
         return view
     }

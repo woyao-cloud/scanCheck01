@@ -1,5 +1,6 @@
 package com.example.compliance.scan.application
 
+import com.example.compliance.common.event.ScanCompletedEvent
 import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.project.application.ProjectService
 import com.example.compliance.project.infrastructure.CredentialCrypto
@@ -25,6 +26,7 @@ import com.example.compliance.scan.infrastructure.ScanJobRepository
 import com.example.compliance.scan.infrastructure.ScanTaskRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -49,6 +51,7 @@ class ScanOrchestrator(
     private val lifecycleService: com.example.compliance.result.application.FindingLifecycleService,
     private val gitCheckout: GitCheckout,
     private val credentialCrypto: CredentialCrypto,
+    private val eventPublisher: ApplicationEventPublisher,
     @Value("\${app.scan.checkout-engines:}") private val checkoutEngines: Set<String>,
 ) {
     private val objectMapper = ObjectMapper()
@@ -171,12 +174,16 @@ class ScanOrchestrator(
             task.durationMs = duration
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
+            // M17：扫描终态事件（best-effort —— 监听器失败不得把成功扫描打成 FAILED，Ruling PL-M17-8）
+            runCatching { eventPublisher.publishEvent(ScanCompletedEvent(scanTaskId, task.projectId, task.status.name)) }
             log(scanTaskId, "SCAN", "INFO", "done findings=${findings.size} created=${upsert.created} updated=${upsert.updated} evaluated=${evaluations.size}")
         } catch (e: Exception) {
             task.status = ScanTaskStatus.FAILED
             task.errorMessage = e.message?.take(500)
             task.finishedAt = Instant.now()
             scanTaskRepository.save(task)
+            // M17：扫描终态事件（best-effort）
+            runCatching { eventPublisher.publishEvent(ScanCompletedEvent(scanTaskId, task.projectId, task.status.name)) }
             // F5 (final review I9): 复扫任务失败 → 把 RECHECKING finding 补偿回退 FIXED，避免卡死
             // （verifyRechecking 只在任务成功路径执行；RECHECKING 无其他出口）。Ruling #52：transition
             // 自带事务自提交。runCatching 保证补偿失败绝不影响上方的 FAILED 落库。
