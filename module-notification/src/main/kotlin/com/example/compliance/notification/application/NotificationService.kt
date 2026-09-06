@@ -1,9 +1,13 @@
 package com.example.compliance.notification.application
 
+import com.example.compliance.common.exception.BusinessException
 import com.example.compliance.notification.domain.Channel
 import com.example.compliance.notification.domain.Notification
 import com.example.compliance.notification.infrastructure.NotificationRepository
 import com.example.compliance.user.infrastructure.UserRepository
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -65,4 +69,35 @@ class NotificationService(
             webhookSender.send(row, unique, occurredAt)
         }
     }
+
+    @Transactional(readOnly = true)
+    fun listMy(userId: Long, page: Int, size: Int, unreadOnly: Boolean): Page<Notification> {
+        // 硬化（镜像 report list C2 / 审计查询 D6）：负 page 拒绝 400，size 钳制 [1,100]，固定 id 倒序
+        if (page < 0) throw BusinessException(400, "page must be non-negative")
+        val pageable = PageRequest.of(page, size.coerceIn(1, 100), Sort.by(Sort.Direction.DESC, "id"))
+        val recipient = userId.toString()
+        return if (unreadOnly) {
+            repository.findByRecipientAndChannelAndReadAtIsNull(recipient, Channel.IN_APP.name, pageable)
+        } else {
+            repository.findByRecipientAndChannel(recipient, Channel.IN_APP.name, pageable)
+        }
+    }
+
+    @Transactional(readOnly = true)
+    fun unreadCount(userId: Long): Long =
+        repository.countByRecipientAndChannelAndReadAtIsNull(userId.toString(), Channel.IN_APP.name)
+
+    @Transactional
+    fun markRead(id: Long, userId: Long) {
+        val row = repository.findByIdAndRecipientAndChannel(id, userId.toString(), Channel.IN_APP.name)
+            ?: throw BusinessException(404, "notification not found: $id")
+        if (row.readAt == null) {
+            row.readAt = Instant.now()
+            repository.save(row)
+        }
+    }
+
+    @Transactional
+    fun markReadAll(userId: Long): Int =
+        repository.markReadAll(userId.toString(), Channel.IN_APP.name, Instant.now())
 }
