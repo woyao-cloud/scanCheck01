@@ -26,4 +26,8 @@ class Notification : BaseEntity() {
     var retryCount: Int = 0
     @Column(name = "sent_at")
     var sentAt: Instant? = null
+    @Column(name = "read_at")
+    var readAt: Instant? = null
+    @Column(name = "error_message")
+    var errorMessage: String? = null
 }

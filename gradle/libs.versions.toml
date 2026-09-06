@@ -17,6 +17,7 @@ spring-boot-starter-data-jpa = { module = "org.springframework.boot:spring-boot-
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+spring-boot-starter-mail = { module = "org.springframework.boot:spring-boot-starter-mail" }
 spring-security-test = { module = "org.springframework.security:spring-security-test" }
 springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
 flyway-core = { module = "org.flywaydb:flyway-core" }
