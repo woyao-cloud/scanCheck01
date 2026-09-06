@@ -13,6 +13,8 @@ class TemplateRenderer(
 ) {
     private val objectMapper = ObjectMapper()
 
+    private val PLACEHOLDER_REGEX = Regex("\\{([^}]+)}")
+
     /** 解析 type 的 PUBLISHED 模板渲染 title/body；无 PUBLISHED/解析失败 → 内置回落。绝不抛出（R-M18-7）。 */
     fun render(notificationType: String, variables: Map<String, Any?>): Pair<String, String> {
         // 一次性解析 PUBLISHED 版本（title/body 同一版），避免双次仓库查询
@@ -30,6 +32,9 @@ class TemplateRenderer(
         return replace(title, variables) to replace(body, variables)
     }
 
+    // R-M18-8：缺失键 → 空串（对全部 {key} 占位符替换，杜绝字面 {x} 泄漏进通知内容）。
     private fun replace(text: String, variables: Map<String, Any?>): String =
-        variables.entries.fold(text) { acc, (k, v) -> acc.replace("{$k}", v?.toString() ?: "") }
+        PLACEHOLDER_REGEX.replace(text) { m ->
+            variables[m.groupValues[1]]?.toString() ?: ""
+        }
 }

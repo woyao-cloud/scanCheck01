@@ -31,8 +31,15 @@ class TemplateRendererTest {
     @Test
     fun `missing variable is replaced with empty string`() {
         every { templateRepository.findByTemplateType("SCAN_COMPLETED") } returns null
+        val (_, body) = renderer.render("SCAN_COMPLETED", emptyMap())
+        assertEquals("扫描  完成：", body)   // {scanTaskId}/{status} 缺失键均空串（R-M18-8）
+    }
+
+    @Test
+    fun `null valued variable is replaced with empty string`() {
+        every { templateRepository.findByTemplateType("SCAN_COMPLETED") } returns null
         val (_, body) = renderer.render("SCAN_COMPLETED", mapOf("scanTaskId" to null, "status" to null))
-        assertEquals("扫描  完成：", body)   // {scanTaskId}/{status} 均空串
+        assertEquals("扫描  完成：", body)   // 存在键但值为 null → 空串
     }
 
     @Test
