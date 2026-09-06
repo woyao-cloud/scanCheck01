@@ -22,36 +22,36 @@ class NotificationEventListenerTest {
     private fun project(owner: Long?) = Project().apply { this.id = 1L; ownerUserId = owner }
 
     @Test
-    fun `regression resolves project owner as recipient`() {
+    fun `regression resolves project owner as recipient with semantic variables`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(7L))
         listener.onRegression(FindingRegressionEvent(1L, 2L, listOf(3L)))
-        verify { service.notify("FINDING_REGRESSION", "finding regressed", "回归：1 个 finding 在扫描 2 复现", listOf(7L)) }
+        verify { service.notify("FINDING_REGRESSION", mapOf<String, Any>("findingCount" to 1, "scanTaskId" to 2L), listOf(7L)) }
     }
 
     @Test
     fun `regression with no owner notifies nothing`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(null))
         listener.onRegression(FindingRegressionEvent(1L, 2L, listOf(3L)))
-        verify(exactly = 0) { service.notify(any(), any(), any(), any()) }
+        verify(exactly = 0) { service.notify(any(), any(), any()) }
     }
 
     @Test
     fun `regression with missing project notifies nothing`() {
         every { projectRepository.findById(99L) } returns Optional.empty()
         listener.onRegression(FindingRegressionEvent(99L, 2L, listOf(3L)))
-        verify(exactly = 0) { service.notify(any(), any(), any(), any()) }
+        verify(exactly = 0) { service.notify(any(), any(), any()) }
     }
 
     @Test
     fun `waiver notifies actor`() {
         listener.onWaiver(RemediationWaiverEvent(1L, 2L, 3L, "r"))
-        verify { service.notify("REMEDIATION_WAIVER", "finding waived", "finding 2 被豁免（r）", listOf(3L)) }
+        verify { service.notify("REMEDIATION_WAIVER", mapOf("findingId" to 2L, "reason" to "r"), listOf(3L)) }
     }
 
     @Test
     fun `service failure does not propagate`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(7L))
-        every { service.notify(any(), any(), any(), any()) } throws RuntimeException("boom")
+        every { service.notify(any(), any(), any()) } throws RuntimeException("boom")
         listener.onRegression(FindingRegressionEvent(1L, 2L, listOf(3L)))   // 不抛 —— runCatching 兜底
         listener.onWaiver(RemediationWaiverEvent(1L, 2L, 3L, "r"))
     }
@@ -60,44 +60,44 @@ class NotificationEventListenerTest {
     fun `scan completed resolves owner`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(7L))
         listener.onScanCompleted(ScanCompletedEvent(1L, 1L, "SUCCESS"))
-        verify { service.notify("SCAN_COMPLETED", "scan completed", "扫描 1 完成：SUCCESS", listOf(7L)) }
+        verify { service.notify("SCAN_COMPLETED", mapOf("scanTaskId" to 1L, "status" to "SUCCESS"), listOf(7L)) }
     }
 
     @Test
     fun `scan completed with no owner notifies nothing`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(null))
         listener.onScanCompleted(ScanCompletedEvent(1L, 1L, "FAILED"))
-        verify(exactly = 0) { service.notify(any(), any(), any(), any()) }
+        verify(exactly = 0) { service.notify(any(), any(), any()) }
     }
 
     @Test
     fun `report snapshot generated resolves owner`() {
         every { projectRepository.findById(1L) } returns Optional.of(project(7L))
         listener.onReportSnapshotGenerated(ReportSnapshotGeneratedEvent(5L, 1L, "COMPLIANCE"))
-        verify { service.notify("REPORT_SNAPSHOT_GENERATED", "report snapshot generated", "快照 5 已生成（COMPLIANCE）", listOf(7L)) }
+        verify { service.notify("REPORT_SNAPSHOT_GENERATED", mapOf("snapshotId" to 5L, "snapshotType" to "COMPLIANCE"), listOf(7L)) }
     }
 
     @Test
     fun `report snapshot with null project notifies nothing`() {
         listener.onReportSnapshotGenerated(ReportSnapshotGeneratedEvent(5L, null, "SCAN_SUMMARY"))
-        verify(exactly = 0) { service.notify(any(), any(), any(), any()) }
+        verify(exactly = 0) { service.notify(any(), any(), any()) }
     }
 
     @Test
     fun `remediation assigned notifies assignee`() {
         listener.onRemediationAssigned(RemediationAssignedEvent(3L, 9L, 4L))
-        verify { service.notify("REMEDIATION_ASSIGNED", "remediation assigned", "finding 3 已指派给你", listOf(4L)) }
+        verify { service.notify("REMEDIATION_ASSIGNED", mapOf("findingId" to 3L), listOf(4L)) }
     }
 
     @Test
     fun `remediation completed notifies actor and assignee deduped`() {
         listener.onRemediationCompleted(RemediationCompletedEvent(3L, 9L, 4L, 4L))
-        verify { service.notify("REMEDIATION_COMPLETED", "remediation completed", "finding 3 已标记完成", listOf(4L)) }
+        verify { service.notify("REMEDIATION_COMPLETED", mapOf("findingId" to 3L), listOf(4L)) }
     }
 
     @Test
     fun `remediation completed notifies actor and assignee`() {
         listener.onRemediationCompleted(RemediationCompletedEvent(3L, 9L, 4L, 5L))
-        verify { service.notify("REMEDIATION_COMPLETED", "remediation completed", "finding 3 已标记完成", listOf(4L, 5L)) }
+        verify { service.notify("REMEDIATION_COMPLETED", mapOf("findingId" to 3L), listOf(4L, 5L)) }
     }
 }

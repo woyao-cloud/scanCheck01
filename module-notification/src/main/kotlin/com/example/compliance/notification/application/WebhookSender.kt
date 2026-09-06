@@ -49,12 +49,4 @@ class WebhookSender(
         }
         repository.save(row)
     }
-
-    /** M17 兼容重载（Task 4 迁移前 NotificationService 仍传 recipientIds/occurredAt）：
-     *  写入行字段后委托 send(row)，保证 R-M18-5 重建路径一致。 */
-    fun send(row: Notification, recipientIds: List<Long>, occurredAt: Instant) {
-        row.recipientIds = recipientIds.joinToString(",")
-        row.occurredAt = occurredAt
-        send(row)
-    }
 }

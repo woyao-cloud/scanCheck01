@@ -16,19 +16,23 @@ import java.time.Instant
 /** M17 通知服务（spec R-M17-D4）：事件 → 站内信落库 + EMAIL/Webhook 真实渠道投递。
  *  REQUIRES_NEW：通知写入必须在独立事务 —— 发布方事务内同步 @EventListener 调用本方法时，
  *  通知失败仅回滚通知自身，绝不标记发布方事务 rollback-only（spec §6.4 best-effort）。
- *  收件人解析第二层（R-M17-D2）：userId → email；第一层「事件→userId」在 NotificationEventListener。 */
+ *  M18 §4.6 (R-M18-4)：签名改 notify(type, variables, recipients)，渲染在 service（所有渠道/收件人共用一次）；
+ *  M6：emailSender.isAvailable() 提升出循环（每事件评估一次）。 */
 @Service
 class NotificationService(
     private val repository: NotificationRepository,
     private val userRepository: UserRepository,
     private val emailSender: EmailSender,
     private val webhookSender: WebhookSender,
+    private val renderer: TemplateRenderer,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun notify(notificationType: String, title: String, body: String, recipients: List<Long>) {
+    fun notify(notificationType: String, variables: Map<String, Any?>, recipients: List<Long>) {
         val unique = recipients.distinct()
         if (unique.isEmpty()) return
         val occurredAt = Instant.now()
+        val (title, body) = renderer.render(notificationType, variables)
+        val emailAvailable = emailSender.isAvailable()
         unique.forEach { userId ->
             // IN_APP：每收件人一行，落库即投递（SENT + sentAt）
             repository.save(Notification().apply {
@@ -41,7 +45,7 @@ class NotificationService(
                 sentAt = occurredAt
             })
             // EMAIL：仅对有邮箱用户建行；mail sender 未配置 → 跳过（镜像 webhook 未配置，Ruling PL-M17-3）
-            if (emailSender.isAvailable()) {
+            if (emailAvailable) {
                 val email = userRepository.findById(userId).orElse(null)?.email
                 if (!email.isNullOrBlank()) {
                     val row = repository.save(Notification().apply {
@@ -65,8 +69,11 @@ class NotificationService(
                 this.title = title
                 content = body
                 status = "PENDING"
+                // R-M18-5：payload 重建字段落行 —— 重试与首投同路径
+                recipientIds = unique.joinToString(",")
+                this.occurredAt = occurredAt
             })
-            webhookSender.send(row, unique, occurredAt)
+            webhookSender.send(row)
         }
     }
 

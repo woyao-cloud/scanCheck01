@@ -14,7 +14,8 @@ import org.springframework.stereotype.Component
 /** 通知事件消费（spec §6.4 best-effort：失败仅日志，不影响发布方主流程）。
  *  收件人解析第一层（R-M17-D2）：事件 → 收件人 userIds（owner/assignee/actor）；
  *  NotificationService.notify 做 userId → email + 渠道 fan-out。
- *  回归收件人修复（spec §3.4）：emptyList() → project.ownerUserId。 */
+ *  回归收件人修复（spec §3.4）：emptyList() → project.ownerUserId。
+ *  M18 §4.6：handler 传语义变量（type + variables），渲染统一在 service。 */
 @Component
 class NotificationEventListener(
     private val notificationService: NotificationService,
@@ -26,8 +27,9 @@ class NotificationEventListener(
     fun onRegression(e: FindingRegressionEvent) = safe("regression project=${e.projectId}") {
         ownerRecipient(e.projectId)?.let { owner ->
             notificationService.notify(
-                "FINDING_REGRESSION", "finding regressed",
-                "回归：${e.findingIds.size} 个 finding 在扫描 ${e.scanTaskId} 复现", listOf(owner),
+                "FINDING_REGRESSION",
+                mapOf("findingCount" to e.findingIds.size, "scanTaskId" to e.scanTaskId),
+                listOf(owner),
             )
         }
     }
@@ -35,15 +37,16 @@ class NotificationEventListener(
     @EventListener
     fun onWaiver(e: RemediationWaiverEvent) = safe("waiver project=${e.projectId}") {
         notificationService.notify(
-            "REMEDIATION_WAIVER", "finding waived",
-            "finding ${e.findingId} 被豁免（${e.reason}）", listOf(e.actorId),
+            "REMEDIATION_WAIVER",
+            mapOf("findingId" to e.findingId, "reason" to e.reason),
+            listOf(e.actorId),
         )
     }
 
     @EventListener
     fun onScanCompleted(e: ScanCompletedEvent) = safe("scan project=${e.projectId}") {
         ownerRecipient(e.projectId)?.let { owner ->
-            notificationService.notify("SCAN_COMPLETED", "scan completed", "扫描 ${e.scanTaskId} 完成：${e.status}", listOf(owner))
+            notificationService.notify("SCAN_COMPLETED", mapOf("scanTaskId" to e.scanTaskId, "status" to e.status), listOf(owner))
         }
     }
 
@@ -51,22 +54,24 @@ class NotificationEventListener(
     fun onReportSnapshotGenerated(e: ReportSnapshotGeneratedEvent) = safe("report snapshot project=${e.projectId}") {
         e.projectId?.let { projectId -> ownerRecipient(projectId) }?.let { owner ->
             notificationService.notify(
-                "REPORT_SNAPSHOT_GENERATED", "report snapshot generated",
-                "快照 ${e.snapshotId} 已生成（${e.snapshotType}）", listOf(owner),
+                "REPORT_SNAPSHOT_GENERATED",
+                mapOf("snapshotId" to e.snapshotId, "snapshotType" to e.snapshotType),
+                listOf(owner),
             )
         }
     }
 
     @EventListener
     fun onRemediationAssigned(e: RemediationAssignedEvent) = safe("remediation assigned finding=${e.findingId}") {
-        notificationService.notify("REMEDIATION_ASSIGNED", "remediation assigned", "finding ${e.findingId} 已指派给你", listOf(e.assigneeId))
+        notificationService.notify("REMEDIATION_ASSIGNED", mapOf("findingId" to e.findingId), listOf(e.assigneeId))
     }
 
     @EventListener
     fun onRemediationCompleted(e: RemediationCompletedEvent) = safe("remediation completed finding=${e.findingId}") {
         notificationService.notify(
-            "REMEDIATION_COMPLETED", "remediation completed",
-            "finding ${e.findingId} 已标记完成", listOfNotNull(e.actorId, e.assigneeId).distinct(),
+            "REMEDIATION_COMPLETED",
+            mapOf("findingId" to e.findingId),
+            listOfNotNull(e.actorId, e.assigneeId).distinct(),
         )
     }
 
