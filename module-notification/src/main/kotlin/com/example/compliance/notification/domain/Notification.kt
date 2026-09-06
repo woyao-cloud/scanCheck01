@@ -30,4 +30,10 @@ class Notification : BaseEntity() {
     var readAt: Instant? = null
     @Column(name = "error_message")
     var errorMessage: String? = null
+    @Column(name = "recipient_ids")
+    var recipientIds: String? = null          // WEBHOOK payload 重建：逗号串 userIds（R-M18-5）
+    @Column(name = "occurred_at")
+    var occurredAt: Instant? = null           // WEBHOOK payload 重建：事件发生时刻（R-M18-5）
+    @Column(name = "next_retry_at")
+    var nextRetryAt: Instant? = null          // 指数退避下次重试门（R-M18-6）
 }

@@ -23,4 +23,12 @@ interface NotificationRepository : JpaRepository<Notification, Long> {
     @Modifying
     @Query("UPDATE Notification n SET n.readAt = :now WHERE n.recipient = :recipient AND n.channel = :channel AND n.readAt IS NULL")
     fun markReadAll(@Param("recipient") recipient: String, @Param("channel") channel: String, @Param("now") now: Instant): Int
+
+    /** 重试候选（M18 §5.5，R-M18-6）：FAILED 且未达最大次数且退避到期。 */
+    fun findByStatusAndChannelInAndRetryCountLessThanAndNextRetryAtLessThanEqual(
+        status: String,
+        channels: Collection<String>,
+        maxAttempts: Int,
+        now: Instant,
+    ): List<Notification>
 }
