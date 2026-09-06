@@ -66,7 +66,7 @@
 - Consumes: `BaseEntity`（module-common，已有依赖）、`TemplateStatus`（本任务产）。
 - Produces: `NotificationTemplate`（`templateType`/`name`/`description`/`version`）、`NotificationTemplateVersion`（`templateId`/`versionNo`/`status: TemplateStatus`/`content: String JSONB`/`createdBy`/`version`）、`NotificationTemplateRepository.findByTemplateType(String): NotificationTemplate?`、`NotificationTemplateVersionRepository.findByTemplateIdOrderByVersionNoDesc(Long): List<...>` + `findFirstByTemplateIdAndStatusOrderByIdDesc(Long, TemplateStatus): ...?`、`Notification` 增 `recipientIds: String?`/`occurredAt: Instant?`/`nextRetryAt: Instant?`、`NotificationRepository.findByStatusAndChannelInAndRetryCountLessThanAndNextRetryAtLessThanEqual(String, Collection<String>, Int, Instant): List<Notification>`。
 
-- [ ] **Step 1: 写 TemplateStatus 枚举**
+- [x] **Step 1: 写 TemplateStatus 枚举**
 
 创建 `module-notification/src/main/kotlin/com/example/compliance/notification/domain/TemplateStatus.kt`（R-M18-3：本地枚举，不复用 checklist VersionStatus —— notification 无 checklist 依赖）：
 
@@ -77,7 +77,7 @@ package com.example.compliance.notification.domain
 enum class TemplateStatus { DRAFT, PUBLISHED, DISABLED }
 ```
 
-- [ ] **Step 2: 写 NotificationTemplate 实体**
+- [x] **Step 2: 写 NotificationTemplate 实体**
 
 创建 `module-notification/src/main/kotlin/com/example/compliance/notification/domain/NotificationTemplate.kt`（逐字镜像 `ReportTemplate`，content 放版本表）：
 
@@ -106,7 +106,7 @@ class NotificationTemplate : BaseEntity() {
 }
 ```
 
-- [ ] **Step 3: 写 NotificationTemplateVersion 实体**
+- [x] **Step 3: 写 NotificationTemplateVersion 实体**
 
 创建 `module-notification/src/main/kotlin/com/example/compliance/notification/domain/NotificationTemplateVersion.kt`（镜像 `ReportTemplateVersion`，sections→content 为 JSONB `{"title","body"}`）：
 
@@ -145,7 +145,7 @@ class NotificationTemplateVersion : BaseEntity() {
 }
 ```
 
-- [ ] **Step 4: 写两个模板仓库**
+- [x] **Step 4: 写两个模板仓库**
 
 创建 `module-notification/src/main/kotlin/com/example/compliance/notification/infrastructure/NotificationTemplateRepository.kt`：
 
@@ -175,7 +175,7 @@ interface NotificationTemplateVersionRepository : JpaRepository<NotificationTemp
 }
 ```
 
-- [ ] **Step 5: Notification 实体补 3 列（重试/payload 重建）**
+- [x] **Step 5: Notification 实体补 3 列（重试/payload 重建）**
 
 在 `module-notification/.../domain/Notification.kt` 的 `errorMessage` 字段后追加（spec §5.2，Instant 已 import）：
 
@@ -188,7 +188,7 @@ interface NotificationTemplateVersionRepository : JpaRepository<NotificationTemp
     var nextRetryAt: Instant? = null          // 指数退避下次重试门（R-M18-6）
 ```
 
-- [ ] **Step 6: NotificationRepository 加重试候选查询**
+- [x] **Step 6: NotificationRepository 加重试候选查询**
 
 在 `module-notification/.../infrastructure/NotificationRepository.kt` 末尾追加（spec §5.5 候选 `FAILED AND retryCount<max AND next_retry_at<=now`）：
 
@@ -203,7 +203,7 @@ interface NotificationTemplateVersionRepository : JpaRepository<NotificationTemp
     ): List<Notification>
 ```
 
-- [ ] **Step 7: 写 V15 迁移（唯一授权 DDL）**
+- [x] **Step 7: 写 V15 迁移（唯一授权 DDL）**
 
 创建 `app-server/src/main/resources/db/migration/V15__notification_template_retry.sql`（spec §7 逐字；镜像 V13 模板表 + V11/V14 TIMESTAMP 风格 + 6 播种 PUBLISHED）：
 
@@ -264,12 +264,12 @@ INSERT INTO notification_template_version (template_id, version_no, status, cont
 
 > 表中 status 用 VARCHAR + `'PUBLISHED'`（枚举 STRING 映射），与 V13 一致。
 
-- [ ] **Step 8: 门禁 —— module-notification 编译 + V15 迁移验证**
+- [x] **Step 8: 门禁 —— module-notification 编译 + V15 迁移验证**
 
 Run: `./gradlew :module-notification:build` 然后 `./gradlew :app-server:test --tests "com.example.compliance.SmokeIntegrationTest"`
 Expected: module-notification BUILD SUCCESSFUL；SmokeIntegrationTest 通过（上下文启动跑 Flyway V1..V15，V15 应用 + 校验通过）。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add module-notification/src/main/kotlin/com/example/compliance/notification/domain/TemplateStatus.kt \
@@ -302,7 +302,7 @@ git commit -m "feat(notification): M18 T1 — versioned template entities + V15 
 - Consumes: `NotificationTemplateRepository`/`NotificationTemplateVersionRepository`/`TemplateStatus`（T1）；`AuditService.record(action, module, userId?, resourceType?, resourceId?, detail?, ip?)`（module-common）；`BusinessException(code, message)`；`ApiResponse.ok(data)`。
 - Produces: `DefaultNotificationTemplates.TITLES: Map<String,String>` + `BODIES: Map<String,String>`（6 类型，与 V15 播种同文）；`TemplateRenderer.render(notificationType: String, variables: Map<String, Any?>): Pair<String, String>`（绝不抛）；`NotificationTemplateService.draft(type, name?, content: JsonNode): NotificationTemplateVersion` / `publish(type)` / `disable(type)` / `versions(type): List<...>`；`NotificationTemplateController`（`/api/v1/notification-templates/{type}/draft|publish|disable|versions`，方法级 @PreAuthorize）；`DraftRequest`/`TemplateVersionView`。
 
-- [ ] **Step 1: 写内置默认模板常量**
+- [x] **Step 1: 写内置默认模板常量**
 
 创建 `module-notification/.../application/DefaultNotificationTemplates.kt`（spec §4.3 逐字；与 V15 播种同文，渲染回落用）：
 
@@ -330,7 +330,7 @@ object DefaultNotificationTemplates {
 }
 ```
 
-- [ ] **Step 2: 写渲染器**
+- [x] **Step 2: 写渲染器**
 
 创建 `module-notification/.../application/TemplateRenderer.kt`（spec §4.4 逐字；一次解析 PUBLISHED 版本，缺失/解析失败回落内置，绝不抛）：
 
@@ -372,7 +372,7 @@ class TemplateRenderer(
 }
 ```
 
-- [ ] **Step 3: 写模板生命周期服务**
+- [x] **Step 3: 写模板生命周期服务**
 
 创建 `module-notification/.../application/NotificationTemplateService.kt`（spec §4.5 逐字；镜像 ReportTemplateService，content JSONB 替代 sections，审计 action `NOTIFICATION_TEMPLATE_PUBLISHED`）：
 
@@ -482,7 +482,7 @@ class NotificationTemplateService(
 }
 ```
 
-- [ ] **Step 4: 写 DTO**
+- [x] **Step 4: 写 DTO**
 
 创建 `module-notification/.../api/NotificationTemplateDtos.kt`（spec §4.7 逐字；镜像 ReportTemplateDtos，sections→content）：
 
@@ -513,7 +513,7 @@ data class TemplateVersionView(
 }
 ```
 
-- [ ] **Step 5: 写控制器**
+- [x] **Step 5: 写控制器**
 
 创建 `module-notification/.../api/NotificationTemplateController.kt`（spec §4.7 逐字；方法级 @PreAuthorize，无 SecurityConfig 改动）：
 
@@ -558,7 +558,7 @@ class NotificationTemplateController(private val service: NotificationTemplateSe
 }
 ```
 
-- [ ] **Step 6: 写渲染器单测**
+- [x] **Step 6: 写渲染器单测**
 
 创建 `module-notification/src/test/kotlin/com/example/compliance/notification/application/TemplateRendererTest.kt`（spec §9.1 覆盖：占位符替换含中文、缺失变量空串、无 PUBLISHED 回落、未知类型回落、有 PUBLISHED 用模板内容、content 解析失败回落）：
 
@@ -632,7 +632,7 @@ class TemplateRendererTest {
 }
 ```
 
-- [ ] **Step 7: 写模板服务单测**
+- [x] **Step 7: 写模板服务单测**
 
 创建 `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationTemplateServiceTest.kt`（镜像 ReportTemplateServiceTest 全部用例，TemplateStatus/content 替换）：
 
@@ -810,7 +810,7 @@ class NotificationTemplateServiceTest {
 }
 ```
 
-- [ ] **Step 8: 写控制器切片测试**
+- [x] **Step 8: 写控制器切片测试**
 
 创建 `module-notification/src/test/kotlin/com/example/compliance/notification/api/NotificationTemplateControllerTest.kt`（镜像 ReportTemplateControllerTest 业务路径；RBAC 正负例在 T5 集成测试 —— PL-M18-1）：
 
@@ -894,12 +894,12 @@ class NotificationTemplateControllerTest {
 }
 ```
 
-- [ ] **Step 9: 门禁**
+- [x] **Step 9: 门禁**
 
 Run: `./gradlew :module-notification:test`
 Expected: BUILD SUCCESSFUL —— TemplateRendererTest 5 测试 + NotificationTemplateServiceTest 11 测试 + NotificationTemplateControllerTest 4 测试全绿，既有测试回归 0 失败。
 
-- [ ] **Step 10: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add module-notification/src/main/kotlin/com/example/compliance/notification/application/DefaultNotificationTemplates.kt \
@@ -930,7 +930,7 @@ git commit -m "feat(notification): M18 T2 — versioned template subsystem (rend
 - Consumes: `Notification`（含 T1 的 `recipientIds`/`occurredAt`/`nextRetryAt`）、`NotificationRepository`、`WebhookClient`、`Channel`。
 - Produces: `NotificationRetryBackoff(maxAttempts: Int)` 构造注入 `@Value("\${compliance.notification.retry.max-attempts:5}")`，`onFailure(row: Notification, message: String?)`（置 FAILED + retryCount+1 + errorMessage.take(500) + 退避 nextRetryAt，达上限标 `max attempts reached`）；`EmailSender` 构造 `(ObjectProvider<JavaMailSender>, NotificationRepository, NotificationRetryBackoff)`，`send(row)` 成功清 errorMessage/nextRetryAt；`WebhookSender` 构造 `(webhookUrl, WebhookClient, NotificationRepository, NotificationRetryBackoff, ObjectMapper)`（PL-M18-2），`send(row)` 从行读 payload（R-M18-5）、序列化入 try（M1）。
 
-- [ ] **Step 1: 写失败策略（单一策略点）**
+- [x] **Step 1: 写失败策略（单一策略点）**
 
 创建 `module-notification/.../application/NotificationRetryBackoff.kt`（spec §5.3 逐字）：
 
@@ -965,7 +965,7 @@ class NotificationRetryBackoff(
 }
 ```
 
-- [ ] **Step 2: 重写 EmailSender（onFailure 替换 fail；成功清重试字段）**
+- [x] **Step 2: 重写 EmailSender（onFailure 替换 fail；成功清重试字段）**
 
 全文件替换 `module-notification/.../application/EmailSender.kt`（spec §5.4）：
 
@@ -1018,7 +1018,7 @@ class EmailSender(
 }
 ```
 
-- [ ] **Step 3: 重写 WebhookSender（send(row) 从行读 + 序列化入 try + onFailure）**
+- [x] **Step 3: 重写 WebhookSender（send(row) 从行读 + 序列化入 try + onFailure）**
 
 全文件替换 `module-notification/.../application/WebhookSender.kt`（spec §5.4 + R-M18-5 + M1 + PL-M18-2）：
 
@@ -1077,7 +1077,7 @@ class WebhookSender(
 }
 ```
 
-- [ ] **Step 4: 写退避策略单测**
+- [x] **Step 4: 写退避策略单测**
 
 创建 `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationRetryBackoffTest.kt`（spec §9.1：退避序列 + 达上限 + 截断）：
 
@@ -1144,7 +1144,7 @@ class NotificationRetryBackoffTest {
 }
 ```
 
-- [ ] **Step 5: 重写 EmailSenderTest（注入 RetryBackoff；成功清重试字段）**
+- [x] **Step 5: 重写 EmailSenderTest（注入 RetryBackoff；成功清重试字段）**
 
 全文件替换 `module-notification/src/test/kotlin/com/example/compliance/notification/application/EmailSenderTest.kt`：
 
@@ -1243,7 +1243,7 @@ class EmailSenderTest {
 }
 ```
 
-- [ ] **Step 6: 重写 WebhookSenderTest（send(row) 从行读；序列化异常 → onFailure）**
+- [x] **Step 6: 重写 WebhookSenderTest（send(row) 从行读；序列化异常 → onFailure）**
 
 全文件替换 `module-notification/src/test/kotlin/com/example/compliance/notification/application/WebhookSenderTest.kt`：
 
@@ -1338,12 +1338,12 @@ class WebhookSenderTest {
 }
 ```
 
-- [ ] **Step 7: 门禁**
+- [x] **Step 7: 门禁**
 
 Run: `./gradlew :module-notification:test`
 Expected: BUILD SUCCESSFUL —— NotificationRetryBackoffTest 4 测试 + EmailSenderTest 4 测试 + WebhookSenderTest 5 测试全绿，既有测试回归 0 失败。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add module-notification/src/main/kotlin/com/example/compliance/notification/application/NotificationRetryBackoff.kt \
@@ -1373,7 +1373,7 @@ git commit -m "feat(notification): M18 T3 — retry backoff strategy + hardened 
 - Consumes: `TemplateRenderer.render(type, variables): Pair<String,String>`（T2）；`EmailSender.send(row)`/`WebhookSender.send(row)`/`NotificationRetryBackoff.maxAttempts`（T3）；`NotificationRepository.findByStatusAndChannelInAndRetryCountLessThanAndNextRetryAtLessThanEqual(...)`（T1）。
 - Produces: `NotificationService.notify(notificationType: String, variables: Map<String, Any?>, recipients: List<Long>)`（新签名，唯一调用方 = NotificationEventListener）；`NotificationRetryJob.retryFailed()`（@Scheduled fixedDelayString `compliance.notification.retry.fixed-delay-ms` 默认 60000，无外层事务、逐行 runCatching）；`NotificationSchedulingConfig`（@EnableScheduling）。
 
-- [ ] **Step 1: 重写 NotificationService（新签名 + 渲染 + M6）**
+- [x] **Step 1: 重写 NotificationService（新签名 + 渲染 + M6）**
 
 全文件替换 `module-notification/.../application/NotificationService.kt`（spec §4.6 + §5.2 语义；listMy/unreadCount/markRead/markReadAll 不变）：
 
@@ -1490,7 +1490,7 @@ class NotificationService(
 }
 ```
 
-- [ ] **Step 2: 重写 NotificationEventListener（6 handler 传语义变量）**
+- [x] **Step 2: 重写 NotificationEventListener（6 handler 传语义变量）**
 
 全文件替换 `module-notification/.../application/NotificationEventListener.kt` 的 6 个 handler 方法体（spec §4.6 逐字；safe()/ownerRecipient() 不变）：
 
@@ -1548,7 +1548,7 @@ class NotificationService(
     }
 ```
 
-- [ ] **Step 3: 写调度启用配置**
+- [x] **Step 3: 写调度启用配置**
 
 创建 `module-notification/.../application/NotificationSchedulingConfig.kt`（spec §5.1）：
 
@@ -1564,7 +1564,7 @@ import org.springframework.scheduling.annotation.EnableScheduling
 class NotificationSchedulingConfig
 ```
 
-- [ ] **Step 4: 写重试 Job**
+- [x] **Step 4: 写重试 Job**
 
 创建 `module-notification/.../application/NotificationRetryJob.kt`（spec §5.5 逐字；无外层事务 + 逐行 runCatching）：
 
@@ -1607,7 +1607,7 @@ class NotificationRetryJob(
 }
 ```
 
-- [ ] **Step 5: 重写 NotificationServiceTest（新签名 + renderer mock + M5）**
+- [x] **Step 5: 重写 NotificationServiceTest（新签名 + renderer mock + M5）**
 
 全文件替换 `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationServiceTest.kt`：
 
@@ -1722,7 +1722,7 @@ class NotificationServiceTest {
 }
 ```
 
-- [ ] **Step 6: 重写 NotificationEventListenerTest（verify 参数改 map）**
+- [x] **Step 6: 重写 NotificationEventListenerTest（verify 参数改 map）**
 
 全文件替换 `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationEventListenerTest.kt`：
 
@@ -1832,7 +1832,7 @@ class NotificationEventListenerTest {
 }
 ```
 
-- [ ] **Step 7: 写重试 Job 单测**
+- [x] **Step 7: 写重试 Job 单测**
 
 创建 `module-notification/src/test/kotlin/com/example/compliance/notification/application/NotificationRetryJobTest.kt`（spec §9.1：候选参数 + 分发 + 异常不杀批）：
 
@@ -1896,12 +1896,12 @@ class NotificationRetryJobTest {
 }
 ```
 
-- [ ] **Step 8: 门禁**
+- [x] **Step 8: 门禁**
 
 Run: `./gradlew :module-notification:test`
 Expected: BUILD SUCCESSFUL —— NotificationServiceTest 6 测试 + NotificationEventListenerTest 11 测试 + NotificationRetryJobTest 3 测试全绿，既有测试回归 0 失败。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add module-notification/src/main/kotlin/com/example/compliance/notification/application/NotificationService.kt \
@@ -1929,7 +1929,7 @@ git commit -m "feat(notification): M18 T4 — notify variables signature + retry
 - Consumes: 全部 T1-T4 产出（模板 API/渲染器/重试 job/事件接线）；`AbstractIntegrationTest`（app-server，共享 Testcontainers PG16）；`@WithMockUser`/`SecurityMockMvcRequestPostProcessors`（spring-security-test 已有）；`StubJavaMailSender`/`StubWebhookClient`（镜像 M17Delivery 同类）。
 - Produces: M4 硬化（发布侧 runCatching 双保险统一）；两个集成测试类验证端到端（模板渲染切换 + 重试闭环 + RBAC 正负例）。
 
-- [ ] **Step 1: M4 —— FindingLifecycleService 发布侧 runCatching**
+- [x] **Step 1: M4 —— FindingLifecycleService 发布侧 runCatching**
 
 修改 `module-result/.../application/FindingLifecycleService.kt`（spec §6 M4）：
 1. 类声明上方（`class FindingLifecycleService` 前）加字段（紧邻 `eventPublisher` 参数后）：
@@ -1958,7 +1958,7 @@ git commit -m "feat(notification): M18 T4 — notify variables signature + retry
         }
 ```
 
-- [ ] **Step 2: M4 测试 —— publishEvent 抛异常不阻断验证流程**
+- [x] **Step 2: M4 测试 —— publishEvent 抛异常不阻断验证流程**
 
 在 `module-result/src/test/kotlin/com/example/compliance/result/application/FindingLifecycleServiceTest.kt` 末尾追加测试（镜像既有 `verifyRechecking closes absent and regresses present findings` 的 mock 装配）：
 
@@ -1982,12 +1982,12 @@ git commit -m "feat(notification): M18 T4 — notify variables signature + retry
     }
 ```
 
-- [ ] **Step 3: 门禁 —— module-result**
+- [x] **Step 3: 门禁 —— module-result**
 
 Run: `./gradlew :module-result:test`
 Expected: BUILD SUCCESSFUL —— FindingLifecycleServiceTest 全绿（含新 M4 测试），既有测试回归 0 失败。
 
-- [ ] **Step 4: 写模板集成测试**
+- [x] **Step 4: 写模板集成测试**
 
 创建 `app-server/src/test/kotlin/com/example/compliance/notification/M18NotificationTemplateIntegrationTest.kt`（完整 SecurityConfig + 真实模板服务/渲染器 + 事件触发；数据前缀 M18TMP-*/M18NTF-*；PL-M18-3 单方法内发布→断言→disable→断言）：
 
@@ -2104,7 +2104,7 @@ class M18NotificationTemplateIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-- [ ] **Step 5: 写重试集成测试**
+- [x] **Step 5: 写重试集成测试**
 
 创建 `app-server/src/test/kotlin/com/example/compliance/notification/M18NotificationRetryIntegrationTest.kt`（stub 渠道首投失败 → 退避门拨回 → 手动触发 job → 重试成功；达上限不入候选；PL-M18-4 独立上下文）：
 
@@ -2264,17 +2264,17 @@ class M18NotificationRetryIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-- [ ] **Step 6: 门禁 —— 两个集成测试类**
+- [x] **Step 6: 门禁 —— 两个集成测试类**
 
 Run: `./gradlew :app-server:test --tests "com.example.compliance.notification.M18NotificationTemplateIntegrationTest" --tests "com.example.compliance.notification.M18NotificationRetryIntegrationTest"`
 Expected: 两个测试类全绿（模板 4 测试 + 重试 2 测试）。
 
-- [ ] **Step 7: 全量构建门**
+- [x] **Step 7: 全量构建门**
 
 Run: `./gradlew build`
 Expected: BUILD SUCCESSFUL —— 全量测试（既有 298 + 本里程碑新增单元/切片/集成）0 失败。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add module-result/src/main/kotlin/com/example/compliance/result/application/FindingLifecycleService.kt \
