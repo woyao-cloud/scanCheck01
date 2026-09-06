@@ -52,7 +52,7 @@
 - Consumes: 既有 `Notification` 实体（V11 表，channel/recipient/type/title/content/status/retry_count/sent_at + BaseEntity）；`compliance-kotlin-module` 插件已注入 spring-boot-starter-test/mockk/kotlin-test。
 - Produces: `Notification.readAt: Instant?` / `Notification.errorMessage: String?`；module-notification 依赖 `module-user`、`module-project`、`spring-boot-starter-mail`；catalog `spring-boot-starter-mail` 条目。Task 2 的 `NotificationService.notify` 依赖 `UserRepository`（module-user）、`EmailSender`（mail）；Task 3 的监听器依赖 `ProjectRepository`（module-project）。
 
-- [ ] **Step 1: 实体增两个可空字段**
+- [x] **Step 1: 实体增两个可空字段**
 
 在 `Notification.kt` 的 `sentAt` 字段之后追加：
 
@@ -63,7 +63,7 @@
     var errorMessage: String? = null
 ```
 
-- [ ] **Step 2: 写 V14 迁移**
+- [x] **Step 2: 写 V14 迁移**
 
 创建 `app-server/src/main/resources/db/migration/V14__notification_read_state.sql`：
 
@@ -72,7 +72,7 @@ ALTER TABLE notification ADD COLUMN read_at TIMESTAMP;
 ALTER TABLE notification ADD COLUMN error_message TEXT;
 ```
 
-- [ ] **Step 3: module-notification 依赖声明**
+- [x] **Step 3: module-notification 依赖声明**
 
 `module-notification/build.gradle.kts` 全文改为：
 
@@ -87,7 +87,7 @@ dependencies {
 }
 ```
 
-- [ ] **Step 4: catalog 补 mail 条目**
+- [x] **Step 4: catalog 补 mail 条目**
 
 `gradle/libs.versions.toml` 的 `[libraries]` 块内、`spring-boot-starter-actuator` 一行之后追加：
 
@@ -97,17 +97,17 @@ spring-boot-starter-mail = { module = "org.springframework.boot:spring-boot-star
 
 （版本由 spring-boot-dependencies BOM 管理，无需 version.ref。）
 
-- [ ] **Step 5: 编译验证**
+- [x] **Step 5: 编译验证**
 
 Run: `./gradlew :module-notification:build`
 Expected: BUILD SUCCESSFUL（实体字段 + 依赖声明编译通过）
 
-- [ ] **Step 6: 迁移 + 校验验证（Flyway V14 + ddl-auto validate）**
+- [x] **Step 6: 迁移 + 校验验证（Flyway V14 + ddl-auto validate）**
 
 Run: `./gradlew :app-server:test --tests SmokeIntegrationTest`
 Expected: PASS —— Flyway 依次应用 V1..V14（含新 V14），`ddl-auto: validate` 校验 `Notification` 实体的 read_at/error_message 与 V14 列一致。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add module-notification/src/main/kotlin/com/example/compliance/notification/domain/Notification.kt \
@@ -141,7 +141,7 @@ git commit -m "feat(notification): M17 entity read state + V14 migration + modul
 - Consumes: Task 1 的 `Notification.readAt/errorMessage` + `UserRepository`（module-user，`findById`）+ `ProjectRepository`（module-project，`findById`）+ `JavaMailSender`（spring-boot-starter-mail）。
 - Produces: `NotificationService.notify(notificationType: String, title: String, body: String, recipients: List<Long>)`（REQUIRES_NEW）；`EmailSender.isAvailable()/send(Notification)`；`WebhookClient.post(url: String, body: String): Boolean`；`WebhookSender.isConfigured()/send(Notification, List<Long>, Instant)`；`NotificationEventListener` 注入 `NotificationService` + `ProjectRepository`。Task 3 的 4 个新事件 handler 复用这些签名；Task 4 的 API 方法加在同一 `NotificationService`。
 
-- [ ] **Step 1: Channel 枚举补 WEBHOOK**（Ruling PL-M17-4）
+- [x] **Step 1: Channel 枚举补 WEBHOOK**（Ruling PL-M17-4）
 
 `Channel.kt` 全文改为：
 
@@ -152,7 +152,7 @@ package com.example.compliance.notification.domain
 enum class Channel { IN_APP, EMAIL, WECHAT, DINGTALK, WEBHOOK }
 ```
 
-- [ ] **Step 2: 重写 NotificationService —— 删除占位契约，落地 notify**
+- [x] **Step 2: 重写 NotificationService —— 删除占位契约，落地 notify**
 
 `NotificationService.kt` 全文替换（删除 `: NotificationSender`、`send`、`persist`、`list`）：
 
@@ -227,7 +227,7 @@ class NotificationService(
 }
 ```
 
-- [ ] **Step 3: EmailSender 渠道适配器（seam：JavaMailSender 接口）**
+- [x] **Step 3: EmailSender 渠道适配器（seam：JavaMailSender 接口）**
 
 创建 `EmailSender.kt`：
 
@@ -283,7 +283,7 @@ class EmailSender(
 }
 ```
 
-- [ ] **Step 4: Webhook seam + 生产客户端 + 适配器**
+- [x] **Step 4: Webhook seam + 生产客户端 + 适配器**
 
 创建 `WebhookClient.kt`：
 
@@ -374,11 +374,11 @@ class WebhookSender(
 }
 ```
 
-- [ ] **Step 5: 删除占位契约**
+- [x] **Step 5: 删除占位契约**
 
 Delete `NotificationSender.kt` 与 `LogNotificationSender.kt`（旧契约被 notify 取代；grep 证实无其他消费者）。
 
-- [ ] **Step 6: 重写监听器 —— 注入 NotificationService + ProjectRepository，回归收件人修复**
+- [x] **Step 6: 重写监听器 —— 注入 NotificationService + ProjectRepository，回归收件人修复**
 
 `NotificationEventListener.kt` 全文替换：
 
@@ -431,7 +431,7 @@ class NotificationEventListener(
 }
 ```
 
-- [ ] **Step 7: 重写 NotificationServiceTest**
+- [x] **Step 7: 重写 NotificationServiceTest**
 
 `NotificationServiceTest.kt` 全文替换：
 
@@ -521,7 +521,7 @@ class NotificationServiceTest {
 }
 ```
 
-- [ ] **Step 8: 重写 NotificationEventListenerTest**
+- [x] **Step 8: 重写 NotificationEventListenerTest**
 
 `NotificationEventListenerTest.kt` 全文替换：
 
@@ -582,7 +582,7 @@ class NotificationEventListenerTest {
 }
 ```
 
-- [ ] **Step 9: 新建 EmailSenderTest**
+- [x] **Step 9: 新建 EmailSenderTest**
 
 创建 `EmailSenderTest.kt`：
 
@@ -675,7 +675,7 @@ class EmailSenderTest {
 }
 ```
 
-- [ ] **Step 10: 新建 WebhookSenderTest**
+- [x] **Step 10: 新建 WebhookSenderTest**
 
 创建 `WebhookSenderTest.kt`：
 
@@ -746,21 +746,21 @@ class WebhookSenderTest {
 }
 ```
 
-- [ ] **Step 11: 删除 LogNotificationSenderTest**
+- [x] **Step 11: 删除 LogNotificationSenderTest**
 
 Delete `LogNotificationSenderTest.kt`（占位契约已删）。
 
-- [ ] **Step 12: 运行 module-notification 测试**
+- [x] **Step 12: 运行 module-notification 测试**
 
 Run: `./gradlew :module-notification:test`
 Expected: 全绿（notify 五测 + 监听器五测 + EmailSender 四测 + WebhookSender 四测）；`NotificationSender`/`LogNotificationSender` 无引用（删除干净）。
 
-- [ ] **Step 13: 全量编译（其他模块不受影响）**
+- [x] **Step 13: 全量编译（其他模块不受影响）**
 
 Run: `./gradlew compileKotlin compileTestKotlin`
 Expected: BUILD SUCCESSFUL（grep 已证实 NotificationSender 仅 module-notification 内部使用）。
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add -A module-notification
@@ -789,7 +789,7 @@ git commit -m "feat(notification): M17 delivery core — notify fan-out + email/
 - Consumes: Task 2 的 `NotificationService.notify(type, title, body, recipients)` 与 `NotificationEventListener`（构造已注入 service + projectRepository）。
 - Produces: 4 个 common 事件 data class（见各 Step 代码）；发布方在真实终态/成功后 publish；监听器 6 个 handler 全集（含回归 owner 解析、报告 null project 跳过）；`RemediationService` 增 2 个 publish + waiver publish runCatching 硬化；`ReportGenerationService` 构造增 `eventPublisher`；`ScanOrchestrator` 构造增 `eventPublisher`。Task 5 集成测试依赖这些事件与行为。
 
-- [ ] **Step 1: 4 个 common 事件类**
+- [x] **Step 1: 4 个 common 事件类**
 
 创建 `module-common/src/main/kotlin/com/example/compliance/common/event/ScanCompletedEvent.kt`：
 
@@ -846,7 +846,7 @@ data class RemediationCompletedEvent(
 )
 ```
 
-- [ ] **Step 2: ScanOrchestrator 终态 publish**
+- [x] **Step 2: ScanOrchestrator 终态 publish**
 
 `ScanOrchestrator.kt` 修改：
 1. 顶部 import 增两行：
@@ -869,7 +869,7 @@ import org.springframework.context.ApplicationEventPublisher
             runCatching { eventPublisher.publishEvent(ScanCompletedEvent(scanTaskId, task.projectId, task.status.name)) }
 ```
 
-- [ ] **Step 3: ReportGenerationService 快照 persist 后 publish**
+- [x] **Step 3: ReportGenerationService 快照 persist 后 publish**
 
 `ReportGenerationService.kt` 修改：
 1. import 增：
@@ -896,7 +896,7 @@ import org.springframework.context.ApplicationEventPublisher
         return snapshot
 ```
 
-- [ ] **Step 4: RemediationService 增 publish + waiver 硬化**
+- [x] **Step 4: RemediationService 增 publish + waiver 硬化**
 
 `RemediationService.kt` 修改：
 1. import 增：
@@ -931,7 +931,7 @@ import com.example.compliance.common.event.RemediationCompletedEvent
         }
 ```
 
-- [ ] **Step 5: 监听器新增 4 个 handler**
+- [x] **Step 5: 监听器新增 4 个 handler**
 
 `NotificationEventListener.kt`（Task 2 已重写）追加 import 与 4 个 handler（在 `onWaiver` 之后）：
 
@@ -976,7 +976,7 @@ handler：
     }
 ```
 
-- [ ] **Step 6: 监听器测试补 4 个新 handler 用例**
+- [x] **Step 6: 监听器测试补 4 个新 handler 用例**
 
 `NotificationEventListenerTest.kt` 追加 import 与测试：
 
@@ -1034,7 +1034,7 @@ import com.example.compliance.common.event.ScanCompletedEvent
     }
 ```
 
-- [ ] **Step 7: ReportGenerationServiceTest 适配新构造 + 验证发布**
+- [x] **Step 7: ReportGenerationServiceTest 适配新构造 + 验证发布**
 
 `ReportGenerationServiceTest.kt` 修改：
 1. import 增 `com.example.compliance.common.event.ReportSnapshotGeneratedEvent`、`org.springframework.context.ApplicationEventPublisher`。
@@ -1052,7 +1052,7 @@ import com.example.compliance.common.event.ScanCompletedEvent
 ```
 （`compliance`/`trend` 测试可选追加，projectId=88L 断言同理。）
 
-- [ ] **Step 8: RemediationServiceTest 补新 publish 验证**
+- [x] **Step 8: RemediationServiceTest 补新 publish 验证**
 
 `RemediationServiceTest.kt` 修改：
 1. import 增：
@@ -1073,7 +1073,7 @@ import com.example.compliance.common.event.RemediationCompletedEvent
         verify { eventPublisher.publishEvent(match<Any> { it is RemediationCompletedEvent && it.assigneeId == 9L }) }
 ```
 
-- [ ] **Step 9: 更新 M10 集成测试（通知语义随 M17 变化）**
+- [x] **Step 9: 更新 M10 集成测试（通知语义随 M17 变化）**
 
 `app-server/src/test/kotlin/com/example/compliance/notification/M10NotificationEventIntegrationTest.kt` 修改：
 1. import 增 `com.example.compliance.project.domain.Project`、`com.example.compliance.project.infrastructure.ProjectRepository`，`@Autowired` 增 `projectRepository`。
@@ -1092,12 +1092,12 @@ import com.example.compliance.common.event.RemediationCompletedEvent
 ```
 （类注释中 `NotificationSender` 措辞一并更新为 `NotificationService`。回归测试保留原断言语义——项目缺失则无通知——不需要；上面新版按 owner 验证修复。）
 
-- [ ] **Step 10: 运行受影响模块测试**
+- [x] **Step 10: 运行受影响模块测试**
 
 Run: `./gradlew :module-common:test :module-notification:test :module-scan:test :module-report:test :module-remediation:test :app-server:compileTestKotlin`
 Expected: 全绿。注意：`:app-server:test` 全量留到 Task 5 门禁跑（M10 集成测试已在本步改好，其 Testcontainers 执行归 Task 5）。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add -A module-common module-scan module-report module-remediation module-notification app-server/src/test/kotlin/com/example/compliance/notification
@@ -1120,7 +1120,7 @@ git commit -m "feat(notification): M17 event wiring — scan/report/remediation 
 - Consumes: Task 2 的 `NotificationService`（构造已含 repository/userRepository/emailSender/webhookSender）。
 - Produces: `NotificationRepository` 增 `findByRecipientAndChannel(recipient, channel, pageable)`、`findByRecipientAndChannelAndReadAtIsNull(...)`、`countByRecipientAndChannelAndReadAtIsNull(recipient, channel)`、`findByIdAndRecipientAndChannel(id, recipient, channel)`、`markReadAll(recipient, channel, now): Int`（@Modifying @Query）；`NotificationService.listMy(userId, page, size, unreadOnly): Page<Notification>`、`unreadCount(userId): Long`、`markRead(id, userId)`、`markReadAll(userId): Int`；`NotificationView`/`UnreadCount` DTO；`NotificationController`（4 端点，@PreAuthorize("isAuthenticated()")）。Task 5 集成测试直接消费这些端点。
 
-- [ ] **Step 1: Repository 读态查询**
+- [x] **Step 1: Repository 读态查询**
 
 `NotificationRepository.kt` 全文替换：
 
@@ -1153,7 +1153,7 @@ interface NotificationRepository : JpaRepository<Notification, Long> {
 }
 ```
 
-- [ ] **Step 2: NotificationService 增 API 方法**
+- [x] **Step 2: NotificationService 增 API 方法**
 
 `NotificationService.kt` 追加 import 与方法（在 `notify` 之后）：
 
@@ -1200,7 +1200,7 @@ import org.springframework.data.domain.Sort
 }
 ```
 
-- [ ] **Step 3: DTO**
+- [x] **Step 3: DTO**
 
 创建 `api/NotificationDtos.kt`：
 
@@ -1233,7 +1233,7 @@ data class NotificationView(
 data class UnreadCount(val count: Long)
 ```
 
-- [ ] **Step 4: 控制器**
+- [x] **Step 4: 控制器**
 
 创建 `api/NotificationController.kt`：
 
@@ -1296,7 +1296,7 @@ class NotificationController(private val service: NotificationService) {
 }
 ```
 
-- [ ] **Step 5: 切片上下文标记**
+- [x] **Step 5: 切片上下文标记**
 
 创建 `NotificationTestConfig.kt`（`com.example.compliance.notification` 包，镜像 AdminTestConfig）：
 
@@ -1311,7 +1311,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 class NotificationTestConfig
 ```
 
-- [ ] **Step 6: 控制器切片测试**
+- [x] **Step 6: 控制器切片测试**
 
 创建 `api/NotificationControllerTest.kt`：
 
@@ -1425,12 +1425,12 @@ class NotificationControllerTest {
 }
 ```
 
-- [ ] **Step 7: 运行 module-notification 测试**
+- [x] **Step 7: 运行 module-notification 测试**
 
 Run: `./gradlew :module-notification:test`
 Expected: 全绿（Task 2 既有 + 本任务切片六测）。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A module-notification
@@ -1451,7 +1451,7 @@ git commit -m "feat(notification): M17 in-app notification center API — list/u
 - Consumes: Task 2 的 notify/EmailSender/WebhookSender/监听器；Task 3 的 4 个事件与发布行为（含回归 owner 解析）；Task 4 的 `/api/v1/notifications` 端点与 `NotificationRepository` 读态查询。
 - Produces: 三个集成测试类（数据前缀：项目 `M17DLV1/2`、`M17EVT1..4`，用户 `m17dlv-*`/`m17evt-*`，标题 `NTF-M17-*`）；`./gradlew build` 全绿。
 
-- [ ] **Step 1: app-server 测试依赖补 mail**
+- [x] **Step 1: app-server 测试依赖补 mail**
 
 `app-server/build.gradle.kts` 的 `testImplementation(libs.spring.security.test)` 之后追加：
 
@@ -1459,7 +1459,7 @@ git commit -m "feat(notification): M17 in-app notification center API — list/u
     testImplementation(libs.spring.boot.starter.mail)   // M17 集成测试 StubJavaMailSender 直接引用 JavaMailSender/jakarta.mail（Ruling PL-M17-7）
 ```
 
-- [ ] **Step 2: 站内信中心集成测试**
+- [x] **Step 2: 站内信中心集成测试**
 
 创建 `M17NotificationCenterIntegrationTest.kt`：
 
@@ -1548,7 +1548,7 @@ class M17NotificationCenterIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-- [ ] **Step 3: 投递集成测试（stub 渠道 + webhook-url 配置）**
+- [x] **Step 3: 投递集成测试（stub 渠道 + webhook-url 配置）**
 
 创建 `M17NotificationDeliveryIntegrationTest.kt`：
 
@@ -1692,7 +1692,7 @@ class M17NotificationDeliveryIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-- [ ] **Step 4: 事件接线集成测试**
+- [x] **Step 4: 事件接线集成测试**
 
 创建 `M17NotificationEventIntegrationTest.kt`：
 
@@ -1780,17 +1780,17 @@ class M17NotificationEventIntegrationTest : AbstractIntegrationTest() {
 }
 ```
 
-- [ ] **Step 5: 运行 M17 集成测试（单独先跑，快速定位）**
+- [x] **Step 5: 运行 M17 集成测试（单独先跑，快速定位）**
 
 Run: `./gradlew :app-server:test --tests "M17*IntegrationTest" --tests "M10NotificationEventIntegrationTest"`
 Expected: 全绿（Testcontainers PG + 真实 SecurityConfig；含更新的 M10 测试）。
 
-- [ ] **Step 6: 全量构建门**
+- [x] **Step 6: 全量构建门**
 
 Run: `./gradlew build`
 Expected: BUILD SUCCESSFUL（全量多模块；既有 260 + M17 新增全绿）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A app-server
